@@ -14,6 +14,10 @@ Depends:
   ks,
   lattice,
   ggplot2,
-  gridExtra
+  gridExtra,
+  optparse,
+  data.table
+Imports: Rcpp
+LinkingTo: Rcpp
 LazyLoad: yes
 RoxygenNote: 6.1.1
