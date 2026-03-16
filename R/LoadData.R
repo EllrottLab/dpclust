@@ -21,17 +21,17 @@
 #' @param ref.genome.version Optional string that represents the reference genome, required when reading in VCF files
 #' @author sd11
 #' @return A list of tables, one for each type of information
-load.data <- function(list_of_data_files, cellularity, Chromosome, position, WT.count, mut.count, subclonal.CN, no.chrs.bearing.mut, mutation.copy.number, subclonal.fraction, phase = NULL, is.male = T, is.vcf = F, ref.genome.version = "hg19", supported_chroms = c(1:22)) {
+load.data <- function(list_of_data_files, cellularity, Chromosome, position, WT.count, mut.count, subclonal.CN, no.chrs.bearing.mut, mutation.copy.number, subclonal.fraction, phase = NULL, is.male = TRUE, is.vcf = FALSE, ref.genome.version = "hg19", supported_chroms = c(1:22)) {
   data <- list()
 
   if (!is.vcf) {
-    for (s in 1:length(list_of_data_files)) {
-      data[[s]] <- as.data.frame(data.table::fread(list_of_data_files[s], header = T, stringsAsFactors = F, sep = "\t"))
+    for (s in seq_along(list_of_data_files)) {
+      data[[s]] <- as.data.frame(data.table::fread(list_of_data_files[s], header = TRUE, stringsAsFactors = FALSE, sep = "\t"))
     }
   } else {
-    print("VCF files are no longer supported")
-    q(save = "no", status = 1)
-    # for(s in 1:length(list_of_data_files)) {
+    log_info("VCF files are no longer supported")
+    stop("VCF files are no longer supported")
+    # for(s in seq_along(list_of_data_files)) {
     #  v = readVcf(list_of_data_files[s], genome=ref.genome.version)
     #  # Transform the VCF into the format that the original load.data function understands
     #  data[[s]] = data.frame(chr=as.vector(seqnames(v)), start=as.vector(start(v))-1, end=as.vector(end(v)),
@@ -65,14 +65,14 @@ load.data.inner <- function(list_of_tables, cellularity, Chromosome, position, W
   mutationCopyNumber <- matrix(NA, no.muts, no.subsamples)
   subclonalFraction <- matrix(NA, no.muts, no.subsamples)
   phasing <- matrix("unphased", no.muts, no.subsamples)
-  for (s in 1:length(list_of_tables)) {
+  for (s in seq_along(list_of_tables)) {
     chromosome[, s] <- list_of_tables[[s]][, Chromosome]
     mut.position[, s] <- as.numeric(list_of_tables[[s]][, position])
     WTCount[, s] <- as.numeric(list_of_tables[[s]][, WT.count])
     mutCount[, s] <- as.numeric(list_of_tables[[s]][, mut.count])
     totalCopyNumber[, s] <- as.numeric(list_of_tables[[s]][, subclonal.CN])
     copyNumberAdjustment[, s] <- as.numeric(list_of_tables[[s]][, no.chrs.bearing.mut])
-    non.deleted.muts[list_of_tables[[s]][, no.chrs.bearing.mut] > 0] <- T
+    non.deleted.muts[list_of_tables[[s]][, no.chrs.bearing.mut] > 0] <- TRUE
     mutationCopyNumber[, s] <- as.numeric(list_of_tables[[s]][, mutation.copy.number])
     subclonalFraction[, s] <- as.numeric(list_of_tables[[s]][, subclonal.fraction])
     # This is disabled for now, as its not used by current methods
@@ -83,7 +83,7 @@ load.data.inner <- function(list_of_tables, cellularity, Chromosome, position, W
 
   # Calculate the kappa, in essense the correction component for the allele frequency of each mutation
   kappa <- matrix(1, no.muts, no.subsamples)
-  for (i in 1:length(list_of_tables)) {
+  for (i in seq_along(list_of_tables)) {
     # multiply by no.chrs.bearing.mut, so that kappa is the fraction of reads required for fully clonal mutations, rather than mutation at MCN = 1
     kappa[, i] <- mutationCopyNumberToMutationBurden(1, list_of_tables[[i]][, subclonal.CN], cellularity[i]) * list_of_tables[[i]][, no.chrs.bearing.mut]
   }
@@ -115,13 +115,13 @@ load.data.inner <- function(list_of_tables, cellularity, Chromosome, position, W
     !any(x %in% as.character(supported_chroms))
   })
 
-  print(paste("Removed", sum(not.there.wt), "with missing WTCount", sep = " "))
-  print(paste("Removed", sum(not.there.mut), "with missing mutCount", sep = " "))
-  print(paste("Removed", sum(not.there.cn | not.cna), "with missing totalCopyNumber", sep = " "))
-  print(paste("Removed", sum(not.there.cna), "with missing copyNumberAdjustment", sep = " "))
-  print(paste("Removed", sum(not.there.kappa), "with missing kappa", sep = " "))
-  print(paste("Removed", sum(not.coverage), "with no coverage", sep = " "))
-  print(paste("Removed", sum(not.on.supported.chrom), "on not supported genomic regions", sep = " "))
+  log_info(paste("Removed", sum(not.there.wt), "with missing WTCount", sep = " "))
+  log_info(paste("Removed", sum(not.there.mut), "with missing mutCount", sep = " "))
+  log_info(paste("Removed", sum(not.there.cn | not.cna), "with missing totalCopyNumber", sep = " "))
+  log_info(paste("Removed", sum(not.there.cna), "with missing copyNumberAdjustment", sep = " "))
+  log_info(paste("Removed", sum(not.there.kappa), "with missing kappa", sep = " "))
+  log_info(paste("Removed", sum(not.coverage), "with no coverage", sep = " "))
+  log_info(paste("Removed", sum(not.on.supported.chrom), "on not supported genomic regions", sep = " "))
 
   select <- !(not.there.wt | not.there.mut | not.there.cn | not.there.cna | not.there.kappa | not.coverage | not.cna | not.on.supported.chrom)
 
@@ -144,9 +144,9 @@ load.data.inner <- function(list_of_tables, cellularity, Chromosome, position, W
   phasing <- as.data.frame(phasing[select, ])
   mutationType <- factor(rep(mutation_type, nrow(mutCount)), levels = c("SNV", "CNA", "indel"))
 
-  print("")
-  print(paste("Removed", no.muts - nrow(WTCount), "mutations with missing data"))
-  print("")
+  log_info("")
+  log_info(paste("Removed", no.muts - nrow(WTCount), "mutations with missing data"))
+  log_info("")
 
   # These are required when this dataset is subsampled
   selection <- NA
@@ -168,19 +168,19 @@ load.data.inner <- function(list_of_tables, cellularity, Chromosome, position, W
 #' Load the CN input for a single sample (for now)
 #' This expects a cnDP input file
 load.cn.data <- function(infile) {
-  cndata <- read.table(infile, header = T, stringsAsFactors = F)
+  cndata <- read.table(infile, header = TRUE, stringsAsFactors = FALSE)
   return(cndata)
 }
 
 #' Load the indel input
 #' This expects a DP indel input file
 load.indel.data <- function(infiles) {
-  indeldata <- lapply(infiles, function(infile) read.table(infile, header = T, stringsAsFactors = F))
+  indeldata <- lapply(infiles, function(infile) read.table(infile, header = TRUE, stringsAsFactors = FALSE))
   return(indeldata)
 }
 
 #' Function that adds copy number as a series of SNVs into a data set
-add.in.cn.as.snv.cluster <- function(dataset, cndata, cellularity, add.conflicts = T, conflicting.events.only = F, num.clonal.events.to.add = 0, min.cna.size = 10) {
+add.in.cn.as.snv.cluster <- function(dataset, cndata, cellularity, add.conflicts = TRUE, conflicting.events.only = FALSE, num.clonal.events.to.add = 0, min.cna.size = 10) {
   # If clonal events are to be added, make a selection. For now this just takes the largest event
   if (num.clonal.events.to.add > 0) {
     # Save the largest clonal event to add to the CNAs
@@ -188,12 +188,12 @@ add.in.cn.as.snv.cluster <- function(dataset, cndata, cellularity, add.conflicts
     cndata_clonal <- cndata[cndata$CNA %in% allowed.cn, ]
 
     if (num.clonal.events.to.add < nrow(cndata_clonal)) {
-      cn_sorted <- sort((cndata_clonal[, 4] - cndata_clonal[, 3]), index.return = T, decreasing = T)
+      cn_sorted <- sort((cndata_clonal[, 4] - cndata_clonal[, 3]), index.return = TRUE, decreasing = TRUE)
       cn_selected <- cn_sorted$ix[1:num.clonal.events.to.add]
     } else {
       cn_selected <- 1:nrow(cndata_clonal)
     }
-    cndata_clonal <- cndata_clonal[cn_selected, , drop = F]
+    cndata_clonal <- cndata_clonal[cn_selected, , drop = FALSE]
   }
 
   # The subclonal events can be used for clustering
@@ -254,7 +254,7 @@ add.in.cn.as.snv.cluster <- function(dataset, cndata, cellularity, add.conflicts
 }
 
 #' Function that adds copy number as a single SNV into a data set
-add.in.cn.as.single.snv <- function(dataset, cndata, cellularity, add.conflicts = T) {
+add.in.cn.as.single.snv <- function(dataset, cndata, cellularity, add.conflicts = TRUE) {
   # The subclonal events can be used for clustering
   allowed.cn <- c("sHD", "sLOH", "sAmp", "sGain", "sLoss")
   cndata <- cndata[cndata$CNA %in% allowed.cn, ]
@@ -296,7 +296,7 @@ add.in.cn.as.single.snv <- function(dataset, cndata, cellularity, add.conflicts 
     # TODO: Setting same CNA CCF across samples does not work for multiple samples!
     dataset$subclonal.fraction <- rbind(dataset$subclonal.fraction, rep(dataset$mutation.copy.number[index, 1], num.samples))
     dataset$phase <- rbind(dataset$phase, rep("unphased", num.samples))
-    dataset$non.deleted.muts <- c(dataset$non.deleted.muts, T)
+    dataset$non.deleted.muts <- c(dataset$non.deleted.muts, TRUE)
   }
   # Setting mutation type of all CNAs and making each CNA most similar to itself
   dataset$mutationType <- factor(c(as.character(dataset$mutationType), rep("CNA", nrow(cndata))), levels = c("SNV", "CNA", "indel"))
@@ -308,7 +308,7 @@ add.in.cn.as.single.snv <- function(dataset, cndata, cellularity, add.conflicts 
     cndata <- cndata[cndata$CNA %in% allowed.conflicts, ]
 
     if (nrow(cndata) == 0) {
-      print("No potential conflicting CNA events found")
+      log_info("No potential conflicting CNA events found")
     } else {
       # The CNA events have already been added to the dataset
       conflict.array <- array(1, c(nrow(dataset$mutCount), nrow(dataset$mutCount)))
@@ -318,13 +318,13 @@ add.in.cn.as.single.snv <- function(dataset, cndata, cellularity, add.conflicts 
         conflict_indices <- get.conflicting.indices(dataset, cndata)
 
         # If there are no conflicts, then move on to the next CNA
-        if (sum(conflict_indices, na.rm = T) == 0) {
+        if (sum(conflict_indices, na.rm = TRUE) == 0) {
           next
         }
 
         # There are conflicts, put them in the conficts array
         if (sum(conflict_indices) > 3) {
-          print(paste("Found", sum(conflict_indices), "conflicts for this segment, but keeping only 1"))
+          log_info(paste("Found", sum(conflict_indices), "conflicts for this segment, but keeping only 1"))
           keep <- which(conflict_indices)[1]
           conflict_indices[which(conflict_indices)] <- FALSE
           conflict_indices[keep] <- TRUE
@@ -338,7 +338,7 @@ add.in.cn.as.single.snv <- function(dataset, cndata, cellularity, add.conflicts 
         }
       }
 
-      print(paste("Found ", conflicting_mutcount, " conflicting CNA and SNVs", sep = ""))
+      log_info(paste("Found ", conflicting_mutcount, " conflicting CNA and SNVs", sep = ""))
     }
     dataset$conflict.array <- conflict.array
   }
@@ -392,7 +392,7 @@ create_pseudo_snv <- function(cndata.i, num_muts, N, conf, cellularity, dataset,
   # print(head(paste("NEW CNA CCF/MCN", cndata.i$frac1_A, dataset$mutation.copy.number[index,1], mcn, dataset$mutCount[index,1], dataset$WTCount[index, 1], conf), 25))
   # TODO: Setting same CNA CCF across samples does not work for multiple samples!
   dataset$subclonal.fraction <- rbind(dataset$subclonal.fraction, matrix(rep(dataset$mutation.copy.number[index, 1], num.samples), ncol = num.samples))
-  dataset$non.deleted.muts <- c(dataset$non.deleted.muts, T)
+  dataset$non.deleted.muts <- c(dataset$non.deleted.muts, TRUE)
 
   new_phase <- matrix(rep(NA, num.samples), ncol = num.samples)
   for (i in 1:num.samples) {
@@ -414,7 +414,7 @@ add.snv.cna.conflicts <- function(dataset, cndata) {
   cndata <- cndata[cndata$CNA %in% allowed.conflicts, ]
 
   if (nrow(cndata) == 0) {
-    print("No potential conflicting CNA events found")
+    log_info("No potential conflicting CNA events found")
   } else {
     # The CNA events have already been added to the dataset
     conflict.array <- array(1, c(nrow(dataset$mutCount), nrow(dataset$mutCount)))
@@ -428,13 +428,13 @@ add.snv.cna.conflicts <- function(dataset, cndata) {
         dataset$phase[dataset$mutationType == "SNV", 1] == "MUT_ON_DELETED"
 
       # If there are no conflicts, then move on to the next CNA
-      if (sum(conflict_indices, na.rm = T) == 0) {
+      if (sum(conflict_indices, na.rm = TRUE) == 0) {
         next
       }
 
       # There are conflicts, put them in the conficts array
       if (sum(conflict_indices) > 3) {
-        print(paste("Found", sum(conflict_indices), "conflicts for this segment, but keeping only 1"))
+        log_info(paste("Found", sum(conflict_indices), "conflicts for this segment, but keeping only 1"))
         keep <- which(conflict_indices)[1]
         conflict_indices[which(conflict_indices)] <- FALSE
         conflict_indices[keep] <- TRUE
@@ -450,14 +450,14 @@ add.snv.cna.conflicts <- function(dataset, cndata) {
       }
     }
 
-    print(paste("Found ", conflicting_mutcount, " conflicting CNA and SNVs", sep = ""))
+    log_info(paste("Found ", conflicting_mutcount, " conflicting CNA and SNVs", sep = ""))
   }
   dataset$conflict.array <- conflict.array
   return(dataset)
 }
 
 #' Returns a list of subclonal SNV indices that are conflicting with a CNA event. This code
-#' classifies a subclonal SNV has a CCF of < 0.9. This function returns a vector consisting of T/F values.
+#' classifies a subclonal SNV has a CCF of < 0.9. This function returns a vector consisting of TRUE/FALSE values.
 #' TODO: Determine whether an SNV is likely to be subclonal in a less arbitrary way.
 get.conflicting.indices <- function(dataset, cndata) {
   if (nrow(cndata) > 1) {
@@ -488,19 +488,19 @@ remove_pseudo_snv_cna_clusters <- function(dataset) {
 #' @param mutation_index Index of mutations to be removed
 #' @return a data set in which the pseudo SNVs are removed
 remove_mutations <- function(dataset, mutation_index) {
-  dataset$chromosome <- dataset$chromosome[-mutation_index, , drop = F]
-  dataset$position <- dataset$position[-mutation_index, , drop = F]
-  dataset$mutCount <- dataset$mutCount[-mutation_index, , drop = F]
-  dataset$WTCount <- dataset$WTCount[-mutation_index, , drop = F]
-  dataset$totalCopyNumber <- dataset$totalCopyNumber[-mutation_index, , drop = F]
-  dataset$copyNumberAdjustment <- dataset$copyNumberAdjustment[-mutation_index, , drop = F]
-  dataset$mutation.copy.number <- dataset$mutation.copy.number[-mutation_index, , drop = F]
-  dataset$kappa <- dataset$kappa[-mutation_index, , drop = F]
-  dataset$subclonal.fraction <- dataset$subclonal.fraction[-mutation_index, , drop = F]
+  dataset$chromosome <- dataset$chromosome[-mutation_index, , drop = FALSE]
+  dataset$position <- dataset$position[-mutation_index, , drop = FALSE]
+  dataset$mutCount <- dataset$mutCount[-mutation_index, , drop = FALSE]
+  dataset$WTCount <- dataset$WTCount[-mutation_index, , drop = FALSE]
+  dataset$totalCopyNumber <- dataset$totalCopyNumber[-mutation_index, , drop = FALSE]
+  dataset$copyNumberAdjustment <- dataset$copyNumberAdjustment[-mutation_index, , drop = FALSE]
+  dataset$mutation.copy.number <- dataset$mutation.copy.number[-mutation_index, , drop = FALSE]
+  dataset$kappa <- dataset$kappa[-mutation_index, , drop = FALSE]
+  dataset$subclonal.fraction <- dataset$subclonal.fraction[-mutation_index, , drop = FALSE]
   dataset$non.deleted.muts <- dataset$non.deleted.muts[-mutation_index]
   dataset$phase <- dataset$phase[-mutation_index]
   dataset$mutationType <- dataset$mutationType[-mutation_index]
-  if (!is.na(dataset$most.similar.mut)) {
+  if (.has_value(dataset$most.similar.mut)) {
     dataset$most.similar.mut <- dataset$most.similar.mut[-mutation_index]
   }
   return(dataset)
@@ -511,19 +511,19 @@ remove_mutations <- function(dataset, mutation_index) {
 #' @param mutphasing data.frame with phasing data
 #' @param add.conflicts Supply TRUE when a mutation-to-mutation confict matrix is to be built (Default: FALSE)
 #' @return a dataset with field mutphasing and potentially field conflict.array added
-add.mutphasing <- function(dataset, mutphasing, add.conflicts = F) {
+add.mutphasing <- function(dataset, mutphasing, add.conflicts = FALSE) {
   dataset$mutphasing <- mutphasing
 
   if (add.conflicts & sum(mutphasing$phasing == "anti-phased") > 0) {
     anti.phased <- mutphasing[mutphasing$phasing == "anti-phased", ]
 
-    if (is.na(dataset$conflict.array)) {
+    if (.is_na_sentinel(dataset$conflict.array)) {
       dataset$conflict.array <- array(1, c(nrow(dataset$mutCount), nrow(dataset$mutCount)))
     }
 
     for (i in 1:nrow(anti.phased)) {
-      print("Adding phasing conflict:")
-      print(anti.phased[i, ])
+      log_info("Adding phasing conflict:")
+      log_info(paste(capture.output(print(anti.phased[i, ])), collapse = "\n"))
 
       # Work out index of both mutations
       k <- which(dataset$chromosome == anti.phased$Chr[i] & dataset$position == anti.phased$Pos1[i])
@@ -585,11 +585,11 @@ append.dataset <- function(a, b) {
     stop("Cannot append two datasets of different sizes or with different cellularities")
   }
 
-  if (!is.na(a$sampling.selection) | !is.na(b$sampling.selection)) {
+  if (.has_value(a$sampling.selection) | .has_value(b$sampling.selection)) {
     stop("Cannot append datasets that have been downsampled")
   }
 
-  if (!is.na(a$conflict.array) | !is.na(b$conflict.array)) {
+  if (.has_value(a$conflict.array) | .has_value(b$conflict.array)) {
     stop("Cannot append datasets that contain conflict arrays")
   }
 

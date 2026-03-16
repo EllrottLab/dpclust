@@ -26,10 +26,10 @@ plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y
   # Convert data into the space that was used for the clustering. This is done dynamically through the given data.
   xlabel = "Mutation Copy Number"
   if(is.null(mutationCopyNumber)){
-    print("No mutationCopyNumber. Using mutation burden")
-    if (is.null(y) | is.null(N)) { 
-      print("When not supplying mutationCopyNumber, y (mutCount) and N (totalCount) are required")
-      q(save="no", status=1)
+    log_info("No mutationCopyNumber. Using mutation burden")
+    if (is.null(y) || is.null(N)) {
+      log_info("When not supplying mutationCopyNumber, y (mutCount) and N (totalCount) are required")
+      stop("When not supplying mutationCopyNumber, y (mutCount) and N (totalCount) are required")
     }
     mutationCopyNumber = y/N
     xlabel = "Mutation Burden"
@@ -50,11 +50,14 @@ plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y
   par(mar = c(5,6,4,1)+0.1)
   if (is.null(mutationTypes)) {
     # Plot all the data as a lightgrey histogram
-    hist(mutationCopyNumber[mutationCopyNumber<=x.max], breaks=seq(-0.1, x.max, 0.025), col="lightgrey",freq=FALSE, xlab=xlabel,main="", ylim=c(0,y.max),cex.axis=2,cex.lab=2)
+    finite_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max)
+    hist(mutationCopyNumber[finite_indices], breaks = seq(-0.1, x.max, 0.025), col = "lightgrey", freq = FALSE, xlab = xlabel, main = "", ylim = c(0, y.max), cex.axis = 2, cex.lab = 2)
   } else {
     # Plot SNVs and CNAs with different colours
-    hist(mutationCopyNumber[mutationCopyNumber<=x.max & mutationTypes=="SNV"], breaks=seq(-0.1, x.max, 0.025), col=rgb(211/255,211/255,211/255,0.8),freq=FALSE, xlab=xlabel,main="", ylim=c(0,y.max),cex.axis=2,cex.lab=2)
-    hist(mutationCopyNumber[mutationCopyNumber<=x.max & mutationTypes=="CNA"], breaks=seq(-0.1, x.max, 0.025), col=rgb(255/255,0,0,0.8), freq=FALSE, cex.axis=2, cex.lab=2, add=T)
+    snv_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max) & (mutationTypes == "SNV")
+    cna_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max) & (mutationTypes == "CNA")
+    hist(mutationCopyNumber[snv_indices], breaks = seq(-0.1, x.max, 0.025), col = rgb(211 / 255, 211 / 255, 211 / 255, 0.8), freq = FALSE, xlab = xlabel, main = "", ylim = c(0, y.max), cex.axis = 2, cex.lab = 2)
+    hist(mutationCopyNumber[cna_indices], breaks = seq(-0.1, x.max, 0.025), col = rgb(255 / 255, 0, 0, 0.8), freq = FALSE, cex.axis = 2, cex.lab = 2, add = TRUE)
   }
   polygon(c(xx, rev(xx)), polygon.data, border="plum4", col=cm.colors(1,alpha=0.3))
   lines(xx, yy, col="plum4", lwd=3)
@@ -73,7 +76,7 @@ plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y
   }
   
   # if(length(CALR)>0){
-  #   x.index = sapply(1:length(CALR),function(i){which.min(abs(CALR[i]-xx))})
+  #   x.index = sapply(seq_along(CALR),function(i){which.min(abs(CALR[i]-xx))})
   #   CALR.yvals = (polygon.data[x.index]+polygon.data[2*length(xx)-x.index])/2
   #   points(CALR,CALR.yvals,pch=20,col="red",cex=3)
   # }
@@ -108,19 +111,25 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
   density$median.density = density$median.density / sum(density$median.density)
   ccf.df = as.data.frame(mutationCopyNumber / no.chrs.bearing.mut)
   ccf.df$mutationType = mutationTypes
+  # Filter for finite values to avoid stat_bin warnings
+  ccf.df <- ccf.df[is.finite(ccf.df$V1), , drop=FALSE]
   
-  if (is.na(y.max)) { y.max=max(conf.interval$ymax) }
-  if (is.na(x.max)) { x.max=ceiling(max(ccf.df)) }
+  if (is.na(y.max)) { y.max=max(conf.interval$ymax, na.rm = TRUE) }
+  if (is.na(x.max)) { x.max=ceiling(max(ccf.df$V1, na.rm = TRUE)) }
+  
+  # Ensure all plotting data is finite to avoid warnings
+  conf.interval <- conf.interval[is.finite(conf.interval$x) & is.finite(conf.interval$ymin) & is.finite(conf.interval$ymax), ]
+  density <- density[is.finite(density$fraction.of.tumour.cells) & is.finite(density$median.density), ]
   
   p = ggplot() +
-    geom_histogram(data=ccf.df, mapping=aes(x=V1, y=(..count..)/sum(..count..), fill=mutationType, alpha=0.3), binwidth=0.025, position="stack", alpha=0.8, colour="black") +
-    geom_ribbon(data=conf.interval, mapping=aes(x=x,ymin=ymin,ymax=ymax), fill=cm.colors(1, alpha=0.6)) +
-    geom_line(data=density, mapping=aes(x=fraction.of.tumour.cells, y=median.density), colour="plum4", size=2) +
+    geom_histogram(data=ccf.df, mapping=aes(x=V1, y=after_stat(count/sum(count)), fill=mutationType, alpha=0.3), binwidth=0.025, position="stack", alpha=0.8, colour="black", na.rm = TRUE) +
+    geom_ribbon(data=conf.interval, mapping=aes(x=x,ymin=ymin,ymax=ymax), fill=cm.colors(1, alpha=0.6), na.rm = TRUE) +
+    geom_line(data=density, mapping=aes(x=fraction.of.tumour.cells, y=median.density), colour="plum4", linewidth=2, na.rm = TRUE) +
     xlab("Fraction of Tumour Cells") +
     ylab("Density") +
     ggtitle(samplename) +
     theme_bw() +
-    xlim(0, x.max) +
+    coord_cartesian(xlim = c(0, x.max), ylim = c(0, y.max)) +
     theme(axis.text=element_text(size=font_sizes$axis.text),
           axis.title=element_text(size=font_sizes$axis.title),
           plot.title=element_text(size=font_sizes$plot.title, hjust=0.5),
@@ -128,7 +137,7 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
           legend.title=element_text(size=font_sizes$legend.title),
           legend.position=font_sizes$legend.position) +
     scale_fill_manual(values=cbPalette) +
-    scale_colour_discrete(drop=F, limits=levels(ccf.df$mutationTypes))
+    scale_colour_discrete(drop=FALSE, limits=levels(ccf.df$mutationTypes))
   
   # If cluster locations are provided, add them as a vertical line with nr of mutations mentioned
   if(!is.null(cluster.locations) & !is.null(mutation.assignments)) {
@@ -136,20 +145,23 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
     clusters = unique(mutation.assignments)
     clusters = sort(clusters[!is.na(clusters)])
     assignment_counts = array(NA, length(clusters))
-    for (c in 1:length(clusters)) {
-      assignment_counts[c] = sum(mutation.assignments==clusters[c], na.rm=T)
+    for (c in seq_along(clusters)) {
+      assignment_counts[c] = sum(mutation.assignments==clusters[c], na.rm=TRUE)
     }
     dat = data.frame(cluster.locations[cluster.locations[,1] %in% clusters, c(1,2), drop=FALSE])
     colnames(dat) = c("non_empty_cluster_ids", "non_empty_cluster_locations")
     dat$assignment_counts = assignment_counts
-    dat$y.max = y.max
+    dat$cluster_label = paste("Cluster", dat$non_empty_cluster_ids)
+    dat$mutation_label = paste(dat$assignment_counts, "mutations")
+    dat$y_pos1 = (9 / 10) * y.max
+    dat$y_pos2 = (9 / 10) * y.max - ((1 / 20) * y.max)
 
     # Only attempt to plot when the lines will be within the bounds of the figure, otherwise this will crash
     if (any(dat$non_empty_cluster_locations < x.max)) {
       # Plot a line for each cluster, the cluster id and the number of mutations assigned to it
-      p = p + geom_segment(data=dat, mapping=aes(x=non_empty_cluster_locations, xend=non_empty_cluster_locations, y=0, yend=y.max)) +
-        geom_text(data=dat, mapping=aes(x=(non_empty_cluster_locations+0.01), y=(9/10)*y.max, label=paste("Cluster", dat$non_empty_cluster_ids, sep=" "), hjust=0), size=8) +
-        geom_text(data=dat, mapping=aes(x=(non_empty_cluster_locations+0.01), y=(9/10)*y.max-((1/20)*y.max), label=paste(assignment_counts, "mutations", sep=" "), hjust=0), size=8)
+      p = p + geom_segment(data = dat, mapping = aes(x = non_empty_cluster_locations, xend = non_empty_cluster_locations, y = 0, yend = y.max), linewidth = 1, na.rm = TRUE) +
+        geom_text(data = dat, mapping = aes(x = (non_empty_cluster_locations + 0.01), y = y_pos1, label = cluster_label, hjust = 0), size = 8, na.rm = TRUE) +
+        geom_text(data = dat, mapping = aes(x = (non_empty_cluster_locations + 0.01), y = y_pos2, label = mutation_label, hjust = 0), size = 8, na.rm = TRUE)
     }
   }
   
@@ -185,7 +197,7 @@ plotAssignmentTable = function(cluster_locations, pngFile, cndata=NULL, num_samp
   if (!is.null(indeldata)) {
     cluster_locations$no.of.indels = 0
     for (cluster.no in unique(cluster_locations$Cluster)) {
-      cluster_locations[cluster_locations$Cluster==cluster.no, "no.of.indels"] = sum(indeldata$cluster==cluster.no, na.rm=T)
+      cluster_locations[cluster_locations$Cluster==cluster.no, "no.of.indels"] = sum(indeldata$cluster==cluster.no, na.rm=TRUE)
     }
     colnames(cluster_locations)[ncol(cluster_locations)] = "Num indels"
   }
@@ -220,7 +232,7 @@ plotAssignmentTable = function(cluster_locations, pngFile, cndata=NULL, num_samp
 #' @param cluster.locations Locations of clusters to be overlayed (Default: NULL)
 #' @param plot.mutations Boolean, supply TRUE when mutations should be overlayed on top of the density (Default: FALSE)
 #' @author dw9
-plotnD = function(xvals, yvals, zvals, subclonal.fraction_x, subclonal.fraction_y, pngFile, samplename_x, samplename_y, max.plotted.value=NA, cluster.locations=NULL, plot_mutations=F) {
+plotnD = function(xvals, yvals, zvals, subclonal.fraction_x, subclonal.fraction_y, pngFile, samplename_x, samplename_y, max.plotted.value=NA, cluster.locations=NULL, plot_mutations=FALSE) {
   colours=colorRampPalette(c("white","red"))
   
   # Determine the minimum and maximum plotted values
@@ -279,7 +291,7 @@ plotnD = function(xvals, yvals, zvals, subclonal.fraction_x, subclonal.fraction_
                 ylab=list(label=samplename_y,cex=2),
                 scales=list(x=list(cex=1.5),y=list(cex=1.5)),
                 col.regions=colours,
-                colorkey=F,
+                colorkey=FALSE,
                 panel=panel_function
   )    
   print(fig)

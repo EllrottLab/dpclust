@@ -2,6 +2,19 @@
 # This file contains various functions to assign mutations to clusters
 #
 
+# Resolve iteration indices for pi.h (original iterations) and S.i (stored row indices).
+resolve_sampled_iters <- function(sampledIters, GS.data) {
+  if (!("stored_iters" %in% names(GS.data)) || is.null(GS.data$stored_iters) || .is_na_sentinel(GS.data$stored_iters)) {
+    sampledIters <- as.integer(sampledIters)
+    return(list(pi = sampledIters, state = sampledIters))
+  }
+  mapped <- match(sampledIters, GS.data$stored_iters)
+  if (any(is.na(mapped))) {
+    stop("Stored Gibbs states do not cover required sampled iterations.")
+  }
+  list(pi = as.integer(sampledIters), state = as.integer(mapped))
+}
+
 #' Identify clusters and assign mutations for 1-dimensional clustering
 #'
 #' @param samplename Sample identifier, used for writing out data to disk
@@ -12,7 +25,7 @@
 #' @param no.iters.burn.in Number of iterations to discard as burn in
 #' @return Standardised mutation clustering output, including clusters, mutation assignments and likelihoods
 #' @author dw9, sd11
-oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in) {
+oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in, outdir = ".") {
   no.muts <- length(subclonal.fraction)
   normal.copy.number <- rep(2, no.muts)
   post.burn.in.start <- no.iters.burn.in
@@ -25,7 +38,7 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
   res <- getLocalOptima(density, hypercube.size = 5)
   localOptima <- res$localOptima
   peak.indices <- res$peak.indices
-  write.table(localOptima, paste(samplename, "_localOptima.txt", sep = ""), quote = F, sep = "\t")
+  write.table(localOptima, file.path(outdir, paste0(samplename, "_localOptima.txt")), quote = FALSE, sep = "\t")
 
   # Assign mutations to clusters
   no.optima <- length(localOptima)
@@ -46,15 +59,25 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
     if (length(sampledIters) > 1000) {
       sampledIters <- floor(post.burn.in.start + (1:1000) * (no.iters - no.iters.burn.in) / 1000)
     }
+    sampledIters <- resolve_sampled_iters(sampledIters, GS.data)
 
-    print("Assigning mutations to clusters (C++)...")
-    mutation.preferences <- assign_mutations_1d_cpp(as.matrix(S.i), as.matrix(pi.h), as.numeric(boundary), as.integer(sampledIters))
+    log_info("Assigning mutations to clusters (C++)...")
+    if (!is.integer(S.i)) {
+      storage.mode(S.i) <- "integer"
+    }
+    mutation.preferences <- assign_mutations_1d_cpp(
+      S.i,
+      pi.h,
+      boundary,
+      as.integer(sampledIters$pi),
+      as.integer(sampledIters$state)
+    )
 
     # Drop clusters with all probs for mutations zero
     not.is.empty <- !apply(mutation.preferences, 2, function(x) {
       all(x == 0)
     })
-    mutation.preferences <- mutation.preferences[, not.is.empty, drop = F]
+    mutation.preferences <- mutation.preferences[, not.is.empty, drop = FALSE]
     localOptima <- localOptima[not.is.empty]
     no.optima <- length(localOptima)
 
@@ -62,31 +85,31 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
     most.likely.cluster <- max.col(mutation.preferences)
     out <- cbind(mutation.preferences, most.likely.cluster)
     colnames(out)[(ncol(out) - no.optima):ncol(out)] <- c(paste("prob.cluster", 1:ncol(mutation.preferences), sep = ""), "most.likely.cluster")
-    write.table(out, paste(samplename, "_DP_and_cluster_info.txt", sep = ""), sep = "\t", row.names = F, quote = F)
+    write.table(out, file.path(outdir, paste0(samplename, "_DP_and_cluster_info.txt")), sep = "\t", row.names = FALSE, quote = FALSE)
 
     # Assemble a table with mutation assignments to each cluster
     cluster_assignment_counts <- sapply(1:ncol(mutation.preferences), function(x, m) {
       sum(m == x)
     }, m = most.likely.cluster) # table(most.likely.cluster)
     cluster_locations <- array(NA, c(length(cluster_assignment_counts), 3))
-    cluster_locations[, 1] <- 1:length(cluster_assignment_counts)
+    cluster_locations[, 1] <- seq_along(cluster_assignment_counts)
     cluster_locations[, 2] <- localOptima
     cluster_locations[, 3] <- cluster_assignment_counts
 
     # Keep a record of all clusters, in case it is of interest
-    write.table(cluster_locations, paste(samplename, "_optimaInfo.txt", sep = ""), col.names = c("cluster.no", "location", "no.of.mutations"), row.names = F, sep = "\t", quote = F)
+    write.table(cluster_locations, file.path(outdir, paste0(samplename, "_optimaInfo.txt")), col.names = c("cluster.no", "location", "no.of.mutations"), row.names = FALSE, sep = "\t", quote = FALSE)
 
     # Clear clusters with no mutations assigned
     non_empty_clusters <- which(cluster_locations[, 3] > 0)
-    cluster_locations <- cluster_locations[non_empty_clusters, , drop = F]
-    mutation.preferences <- mutation.preferences[, non_empty_clusters, drop = F]
+    cluster_locations <- cluster_locations[non_empty_clusters, , drop = FALSE]
+    mutation.preferences <- mutation.preferences[, non_empty_clusters, drop = FALSE]
     mutation.preferences <- mutation.preferences / rowSums(mutation.preferences)
 
     # Sort clusters by CCF
-    clust_order <- order(cluster_locations[, 2], decreasing = T)
-    cluster_locations <- cluster_locations[clust_order, , drop = F]
+    clust_order <- order(cluster_locations[, 2], decreasing = TRUE)
+    cluster_locations <- cluster_locations[clust_order, , drop = FALSE]
     cluster_locations[, 1] <- 1:nrow(cluster_locations)
-    mutation.preferences <- mutation.preferences[, clust_order, drop = F]
+    mutation.preferences <- mutation.preferences[, clust_order, drop = FALSE]
 
     # get most likely cluster
     most.likely.cluster <- max.col(mutation.preferences)
@@ -127,7 +150,7 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
   # identity.strengths = build_coassignment_prob_matrix_densities(GS.data$S.i, GS.data$pi.h, no.iters.burn.in)
   # identity.strengths = identity.strengths*no.iters.post.burn.in
 
-  print("Setting up the data")
+  log_info("Setting up the data")
   no.muts <- nrow(mutCount)
   no.subsamples <- ncol(mutCount)
 
@@ -158,7 +181,7 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
     }
   }
 
-  print("Opening devices for plotting")
+  log_info("Opening devices for plotting")
   pdf(file.path(outdir, paste(samplename, "_", no.iters, "iters_", no.iters.burn.in, "burnin_histograms.pdf", sep = "")), height = 4, width = 4 * no.subsamples)
   hist.device <- dev.cur()
   par(mfrow = c(2, no.subsamples))
@@ -171,13 +194,13 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
     par(mfrow = c(1, no.subsamples * (no.subsamples - 1) / 2))
   }
 
-  print("Initialising storage")
+  log_info("Initialising storage")
   consensus.assignments <- rep(1, no.muts)
   no.nodes <- 1
   current.agreement <- sum(identity.strengths)
 
   fractional.current.agreement <- current.agreement / (no.muts * no.muts * no.iters.post.burn.in)
-  print(paste("1 node:", current.agreement, fractional.current.agreement))
+  log_info(paste("1 node:", current.agreement, fractional.current.agreement))
 
   # initialise all mutations in one node, so the number of pairwise agreements is just the number of times a pair of mutations appear in the same node
   pairwise.agreements <- identity.strengths
@@ -189,8 +212,8 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
   all.likelihoods <- list()
   all.likelihoods[[no.nodes]] <- matrix(rep(1, no.muts * no.subsamples), ncol = no.subsamples)
 
-  print("Start adding nodes")
-  node.added <- T
+  log_info("Start adding nodes")
+  node.added <- TRUE
   while (node.added) {
     unique.nodes <- unique(consensus.assignments)
     no.nodes <- length(unique.nodes)
@@ -201,13 +224,13 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
     new.unique.nodes <- c(unique.nodes, new.node)
 
     # iteratively move muts to the new node or back again
-    mut.moved <- T
+    mut.moved <- TRUE
     count <- 1
     saved.consensus.assignments <- new.consensus.assignments
     # we may need to avoid infinite cycling by checking whether a set of node assignments has been repeated
     while (mut.moved) {
       count <- count + 1
-      mut.moved <- F
+      mut.moved <- FALSE
       rand.inds <- sample(no.muts)
       for (r in rand.inds) {
         old.agreement <- sum(new.pairwise.agreements[r, ])
@@ -221,7 +244,7 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
         new.agreement <- sum(identity.strengths[r, temp.ass == new.ass]) + sum(no.iters.post.burn.in - identity.strengths[r, temp.ass != new.ass])
 
         if (new.agreement > old.agreement) {
-          mut.moved <- T
+          mut.moved <- TRUE
           new.consensus.assignments[r] <- new.ass
           new.pairwise.agreements[r, ] <- NA
           new.pairwise.agreements[, r] <- NA
@@ -278,10 +301,10 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
         }
       }
     } else {
-      node.added <- F
+      node.added <- FALSE
     }
   }
-  print("Done adding nodes, cleaning up and writing output/last figures")
+  log_info("Done adding nodes, cleaning up and writing output/last figures")
   dev.off(which = hist.device)
   dev.off(which = density.device)
   if (no.subsamples > 1) {
@@ -331,7 +354,7 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
     #     #png(paste("/nfs/team78pc11/dw9/Lucy_heterogeneity_23Jan2014_1000iters/",samplename,"_heterogeneity_linePlot.png",sep=""),width=2000,height=1500)
     #     png(paste(outdir, "/", samplename,"_heterogeneity_linePlot.png",sep=""),width=2000,height=1500)
     #     par(mar=c(10,6,2,2),cex=2)
-    #     plot(rep(1:ncol(subclonal.fraction),nrow(subclonal.fraction)),c(subclonal.fraction),type="n",xlab = "sample",xaxt="n",ann = F,xlim=c(0.5,ncol(subclonal.fraction)+2))
+    #     plot(rep(1:ncol(subclonal.fraction),nrow(subclonal.fraction)),c(subclonal.fraction),type="n",xlab = "sample",xaxt="n",ann = FALSE,xlim=c(0.5,ncol(subclonal.fraction)+2))
     #     axis(1,at=1:ncol(subclonal.fraction),labels=paste(samplename,subsamplenames,sep=""),las=2)
     #     mtext(side = 1, text = "sample", line = 6,cex=3)
     #     mtext(side = 2, text = "allele fraction", line = 4,cex=3)
@@ -352,9 +375,9 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
     #     dev.off()
   }
   most.likely.cluster <- all.consensus.assignments[[best.BIC.index]]
-  write.table(cbind(1:length(table(most.likely.cluster)), table(most.likely.cluster), all.node.positions[[best.BIC.index]]), paste(outdir, "/", samplename, "_optimaInfo.txt", sep = ""), col.names = c("cluster.no", "no.muts.in.cluster", paste(samplename, subsamplenames, sep = "")), sep = "\t", quote = F, row.names = F)
+  write.table(cbind(seq_along(table(most.likely.cluster)), table(most.likely.cluster), all.node.positions[[best.BIC.index]]), paste(outdir, "/", samplename, "_optimaInfo.txt", sep = ""), col.names = c("cluster.no", "no.muts.in.cluster", paste(samplename, subsamplenames, sep = "")), sep = "\t", quote = FALSE, row.names = FALSE)
   assignment_counts <- table(most.likely.cluster)
-  cluster.locations <- data.frame(cbind(as.numeric(names(assignment_counts)), all.node.positions[[best.BIC.index]], assignment_counts), stringsAsFactors = F)
+  cluster.locations <- data.frame(cbind(as.numeric(names(assignment_counts)), all.node.positions[[best.BIC.index]], assignment_counts), stringsAsFactors = FALSE)
   return(list(best.node.assignments = most.likely.cluster, best.assignment.likelihoods = all.likelihoods[[best.BIC.index]], cluster.locations = cluster.locations, all.assignment.likelihoods = NA))
 }
 
@@ -395,7 +418,7 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
   getHypercubeIndices <- function(gridsize, lastMin, hypercube.size) {
     indices <- array(0, (2 * hypercube.size + 1)^length(lastMin))
     pos.within.hypercube <- array(0, c((2 * hypercube.size + 1)^length(lastMin), length(lastMin)))
-    for (i in 1:length(lastMin)) {
+    for (i in seq_along(lastMin)) {
       pos.within.hypercube[, i] <- rep(0:(2 * hypercube.size), each = (2 * hypercube.size + 1)^(i - 1), times = (2 * hypercube.size + 1)^(length(lastMin) - i))
     }
     indices <- pos.within.hypercube[, 1] + lastMin[1]
@@ -415,7 +438,7 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
   getNextHyperCube <- function(gridsize, lastMin, hypercube.size) {
     current.dimension <- length(gridsize)
     lastMin[current.dimension] <- lastMin[current.dimension] + 1
-    while (T) {
+    while (TRUE) {
       if (lastMin[current.dimension] == gridsize[current.dimension] - 2 * hypercube.size + 1) {
         if (current.dimension == 1) {
           return(NULL)
@@ -448,8 +471,8 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
   localMins <- localMins + hypercube.size
   localOptima <- array(rep(range[, 1], each = no.subsamples), dim(localMins))
   localOptima <- localOptima + array(rep((range[, 2] - range[, 1]) / (gridsize - 1), each = no.subsamples), dim(localMins)) * localMins
-  write.table(cbind(localOptima, above95confidence), paste(new_output_folder, "/", samplename, "_localMultidimensionalOptima_", density.smooth, ".txt", sep = ""), quote = F, sep = "\t", row.names = F, col.names = c(paste(samplename, subsamples, sep = ""), "above95percentConfidence"))
-  write.table(localOptima[above95confidence, , drop = F], paste(new_output_folder, "/", samplename, "_localHighConfidenceMultidimensionalOptima_", density.smooth, ".txt", sep = ""), quote = F, sep = "\t", row.names = F, col.names = paste(samplename, subsamples, sep = ""))
+  write.table(cbind(localOptima, above95confidence), paste(new_output_folder, "/", samplename, "_localMultidimensionalOptima_", density.smooth, ".txt", sep = ""), quote = FALSE, sep = "\t", row.names = FALSE, col.names = c(paste(samplename, subsamples, sep = ""), "above95percentConfidence"))
+  write.table(localOptima[above95confidence, , drop = FALSE], paste(new_output_folder, "/", samplename, "_localHighConfidenceMultidimensionalOptima_", density.smooth, ".txt", sep = ""), quote = FALSE, sep = "\t", row.names = FALSE, col.names = paste(samplename, subsamples, sep = ""))
 
   no.optima <- nrow(localOptima)
 
@@ -461,7 +484,7 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     # and then estimate posterior probs of belonging to each cluster
     peak.heights <- median.density[peak.indices]
 
-    # if T, j is 'above' i, relative to the plane through the origin
+    # if TRUE, j is 'above' i, relative to the plane through the origin
     vector.direction <- array(NA, c(no.optima, no.optima))
 
     boundary <- array(NA, c(no.optima, no.optima))
@@ -507,12 +530,24 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     if (length(sampledIters) > 1000) {
       sampledIters <- floor(post.burn.in.start + (1:1000) * (no.iters - burn.in) / 1000)
     }
+    sampledIters <- resolve_sampled_iters(sampledIters, GS.data)
 
-    print("Assigning mutations to clusters (C++ nD)...")
-    pi_h_flat <- as.numeric(GS.data$pi.h)
+    log_info("Assigning mutations to clusters (C++ nD)...")
+    if (!is.integer(S.i)) {
+      storage.mode(S.i) <- "integer"
+    }
     pi_h_dims <- as.integer(dim(GS.data$pi.h))
-    plane_vector_flat <- as.numeric(plane.vector)
-    mutation.preferences <- assign_mutations_nd_cpp(as.matrix(S.i), pi_h_flat, pi_h_dims, as.matrix(boundary), plane_vector_flat, as.matrix(vector.length), as.matrix(vector.direction), as.integer(sampledIters))
+    mutation.preferences <- assign_mutations_nd_cpp(
+      S.i,
+      GS.data$pi.h,
+      pi_h_dims,
+      boundary,
+      plane.vector,
+      vector.length,
+      vector.direction,
+      as.integer(sampledIters$pi),
+      as.integer(sampledIters$state)
+    )
     most.likely.cluster <- max.col(mutation.preferences)
     assignment.likelihood <- mutation.preferences[cbind(1:no.muts, most.likely.cluster)]
 
@@ -523,7 +558,7 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     # no.muts.per.cluster = array(0,c(no.perms,no.optima))
     # for(p in 1:no.muts){
     #       print(p)
-    #       sampled.cluster = sample(1:no.optima,no.perms,mutation.preferences[p,],replace=T)
+    #       sampled.cluster = sample(1:no.optima,no.perms,mutation.preferences[p,],replace=TRUE)
     #       for(c in unique(sampled.cluster)){
     #               sampled.vals[sampled.cluster == c,c,] = sampled.vals[sampled.cluster == c,c,] + rep(subclonal.fraction[p,],each = sum(sampled.cluster == c))
     #               no.muts.per.cluster[sampled.cluster == c,c] = no.muts.per.cluster[sampled.cluster == c,c] + 1
@@ -533,7 +568,7 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     # quantiles = array(NA, c(no.optima,no.subsamples,3))
     # for(c in 1:no.optima){
     #       for(s in 1:no.subsamples){
-    #               quantiles[c,s,] = quantile(sampled.vals[,c,s],probs=c(0.025,0.5,0.975),na.rm=T)
+    #               quantiles[c,s,] = quantile(sampled.vals[,c,s],probs=c(0.025,0.5,0.975),na.rm=TRUE)
     #       }
     # }
     # new method - 180714
@@ -542,11 +577,11 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     # totals = table(factor(most.likely.cluster,levels = 1:no.optima))
     # for(i in 1:no.optima){
     #       sampled.thetas[[i]] = array(NA,c(length(sampledIters)*totals[i],no.subsamples))
-    #       for(s in 1:length(sampledIters)){
+    #       for(s in seq_along(sampledIters)){
     #               sampled.thetas[[i]][((s-1)*totals[i]+1):(s*totals[i]),] = pi.h[sampledIters[s],S.i[sampledIters[s],most.likely.cluster==i],]
     #       }
     #       for(s in 1:no.subsamples){
-    #               quantiles[i,s,] = quantile(sampled.thetas[[i]][,s],probs=c(0.025,0.5,0.975),na.rm=T)
+    #               quantiles[i,s,] = quantile(sampled.thetas[[i]][,s],probs=c(0.025,0.5,0.975),na.rm=TRUE)
     #       }
     # }
     # new method - 210714 - should be intermediate between previous methods
@@ -554,15 +589,17 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     sampled.thetas <- list()
     totals <- table(factor(most.likely.cluster, levels = 1:no.optima))
     for (i in 1:no.optima) {
-      sampled.thetas[[i]] <- array(NA, c(length(sampledIters), totals[i], no.subsamples))
-      for (s in seq_along(sampledIters)) {
-        sampled.thetas[[i]][s, , ] <- GS.data$pi.h[sampledIters[s], S.i[sampledIters[s], most.likely.cluster == i], ]
+      sampled.thetas[[i]] <- array(NA, c(length(sampledIters$pi), totals[i], no.subsamples))
+      for (s in seq_along(sampledIters$pi)) {
+        s_pi <- sampledIters$pi[s]
+        s_state <- sampledIters$state[s]
+        sampled.thetas[[i]][s, , ] <- GS.data$pi.h[s_pi, S.i[s_state, most.likely.cluster == i], ]
       }
       for (s in 1:no.subsamples) {
-        median.sampled.vals <- sapply(seq_along(sampledIters), function(x) {
+        median.sampled.vals <- sapply(seq_along(sampledIters$pi), function(x) {
           median(sampled.thetas[[i]][x, , s])
         })
-        quantiles[i, s, ] <- quantile(median.sampled.vals, probs = c(0.025, 0.5, 0.975), na.rm = T)
+        quantiles[i, s, ] <- quantile(median.sampled.vals, probs = c(0.025, 0.5, 0.975), na.rm = TRUE)
       }
     }
 
@@ -577,13 +614,13 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     write.table(cluster.locations,
       paste(new_output_folder, "/", samplename, "_optimaInfo_", density.smooth, ".txt", sep = ""),
       col.names = c("cluster.no", paste(samplename, subsamples, sep = ""), "estimated.no.of.mutations", "no.of.mutations.assigned"),
-      row.names = F,
+      row.names = FALSE,
       sep = "\t",
-      quote = F
+      quote = FALSE
     )
 
-    write.table(out, paste(new_output_folder, "/", samplename, "_DP_and_cluster_info_", density.smooth, ".txt", sep = ""), sep = "\t", row.names = F, quote = F)
-    write.table(CIs, paste(new_output_folder, "/", samplename, "_confInts_", density.smooth, ".txt", sep = ""), col.names = paste(rep(paste(samplename, subsamples, sep = ""), each = 2), rep(c(".lower.CI", ".upper.CI"), no.subsamples), sep = ""), row.names = F, sep = "\t", quote = F)
+    write.table(out, paste(new_output_folder, "/", samplename, "_DP_and_cluster_info_", density.smooth, ".txt", sep = ""), sep = "\t", row.names = FALSE, quote = FALSE)
+    write.table(CIs, paste(new_output_folder, "/", samplename, "_confInts_", density.smooth, ".txt", sep = ""), col.names = paste(rep(paste(samplename, subsamples, sep = ""), each = 2), rep(c(".lower.CI", ".upper.CI"), no.subsamples), sep = ""), row.names = FALSE, sep = "\t", quote = FALSE)
   } else {
     most.likely.cluster <- rep(1, no.muts)
     cluster.locations <- matrix(NA, nrow = 1, ncol = length(subsamples) + 3)
@@ -597,18 +634,18 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
   }
 
   # Remove the estimated number of SNVs per cluster from the cluster locations table
-  cluster.locations <- as.data.frame(cluster.locations[, c(1:(length(subsamples) + 1), ncol(cluster.locations)), drop = F])
+  cluster.locations <- as.data.frame(cluster.locations[, c(1:(length(subsamples) + 1), ncol(cluster.locations)), drop = FALSE])
   # Report only the clusters that have mutations assigned
   non_empty_clusters <- cluster.locations[, ncol(cluster.locations)] > 0
-  cluster.locations <- cluster.locations[non_empty_clusters, , drop = F]
-  mutation.preferences <- mutation.preferences[, non_empty_clusters, drop = F]
+  cluster.locations <- cluster.locations[non_empty_clusters, , drop = FALSE]
+  mutation.preferences <- mutation.preferences[, non_empty_clusters, drop = FALSE]
   mutation.preferences <- mutation.preferences / rowSums(mutation.preferences)
 
   # Sort clusters by summed CCF (as a proxy for most clonal cluster first)
-  clust_order <- order(rowSums(cluster.locations[, 2:(ncol(cluster.locations) - 1)]), decreasing = T)
-  cluster.locations <- cluster.locations[clust_order, , drop = F]
+  clust_order <- order(rowSums(cluster.locations[, 2:(ncol(cluster.locations) - 1)]), decreasing = TRUE)
+  cluster.locations <- cluster.locations[clust_order, , drop = FALSE]
   cluster.locations[, 1] <- 1:nrow(cluster.locations)
-  mutation.preferences <- mutation.preferences[, clust_order, drop = F]
+  mutation.preferences <- mutation.preferences[, clust_order, drop = FALSE]
 
   # get most likely cluster
   most.likely.cluster <- max.col(mutation.preferences)
@@ -656,14 +693,14 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
 #' Assign mutations to clusters by looking at the binomial probability of each cluster for generating a mutation
 #' This for now only works with a single timepoint
 #' @noRd
-mutation_assignment_binom <- function(clustering_density, mutCount, WTCount, copyNumberAdjustment, tumourCopyNumber, normalCopyNumber, cellularity, samplename) {
+mutation_assignment_binom <- function(clustering_density, mutCount, WTCount, copyNumberAdjustment, tumourCopyNumber, normalCopyNumber, cellularity, samplename, outdir = ".") {
   # Define convenience variables
   num.timepoints <- ncol(mutCount)
   num.muts <- nrow(mutCount)
 
   if (num.timepoints > 1) {
     warning("Assigment of mutations through binomial only implemented for a single timepoint")
-    q(save = "no")
+    stop("Assigment of mutations through binomial only implemented for a single timepoint")
   }
 
   # Obtain peak locations whtin the given clustering density
@@ -721,7 +758,7 @@ mutation_assignment_binom <- function(clustering_density, mutCount, WTCount, cop
       output[c, 3] <- 0
     }
   }
-  write.table(output, paste(samplename, "_optimaInfo.txt", sep = ""), col.names = c("cluster.no", "location", "no.of.mutations"), row.names = F, sep = "\t", quote = F)
+  write.table(output, file.path(outdir, paste0(samplename, "_optimaInfo.txt")), col.names = c("cluster.no", "location", "no.of.mutations"), row.names = FALSE, sep = "\t", quote = FALSE)
 
   return(list(best.node.assignments = most.likely.cluster, best.assignment.likelihoods = assignment.likelihood, all.assignment.likelihoods = assignment_probs, cluster.locations = output))
 }
@@ -758,29 +795,29 @@ getLocalOptima <- function(cluster_density, hypercube.size = 20) {
 #' @author sd11, dw9
 getClusterDensity <- function(clustering_density, cluster_locations, min.window.density) {
   cluster_density <- array(NA, length(cluster_locations))
-  for (c in 1:length(cluster_locations)) {
+  for (c in seq_along(cluster_locations)) {
     cluster_location <- cluster_locations[c]
     x.cluster <- which.min(abs(clustering_density$fraction.of.tumour.cells - cluster_location))
     # Obtain the left most x.axis point of the cluster
-    run <- T
+    run <- TRUE
     i <- x.cluster
     while (run) {
       if (i != 0 && clustering_density[i, ]$median.density > min.window.density) {
         i <- i - 1
       } else {
-        run <- F
+        run <- FALSE
       }
     }
     x.cluster.min <- i
 
     # Obtain the right most x.axis point of the cluster
-    run <- T
+    run <- TRUE
     i <- x.cluster
     while (run) {
       if (i != (nrow(clustering_density) + 1) && clustering_density[i, ]$median.density > min.window.density) {
         i <- i + 1
       } else {
-        run <- F
+        run <- FALSE
       }
     }
     x.cluster.max <- i
@@ -812,7 +849,7 @@ calc_cluster_conf_intervals <- function(GS.data, mut_assignments, clusterids, no
   assign_ccfs <- get_snv_assignment_ccfs(GS.data$pi.h, GS.data$S.i, no.muts, no.timepoints, no.iters, no.iters.burn.in)
   cluster_intervals <- data.frame()
   for (t in 1:no.timepoints) {
-    for (i in 1:length(clusterids)) {
+    for (i in seq_along(clusterids)) {
       # get all SNVs assigned to this cluster
       clusterid <- clusterids[i]
       assigned <- which(mut_assignments == clusterid)
@@ -831,6 +868,7 @@ calc_cluster_conf_intervals <- function(GS.data, mut_assignments, clusterids, no
 #' the SNV would've been assigned during clustering if those were the cluster locations
 get_mutation_preferences <- function(GS.data, density, mut_assignments, clusterids, cluster_ccfs, no.muts, no.timepoints, no.iters, no.iters.burn.in) {
   sampledIters <- (no.iters.burn.in + 1):no.iters
+  sampledIters <- resolve_sampled_iters(sampledIters, GS.data)
 
   res <- getLocalOptima(density, hypercube.size = 5)
   localOptima <- res$localOptima
@@ -839,8 +877,8 @@ get_mutation_preferences <- function(GS.data, density, mut_assignments, clusteri
   # Check if any corresponding peaks to found clusters
   peak_is_cluster <- unlist(lapply(localOptima, function(x) any(abs(x - cluster_ccfs) < .Machine$double.eps^0.5)))
   if (sum(peak_is_cluster) == 0) {
-    print("No corresponding cluster locations when calculating cluster order probs, this function only works with the density mutation assignment")
-    dummy_matrix <- array(0, c(length(sampledIters), no.muts, no.timepoints))
+    log_info("No corresponding cluster locations when calculating cluster order probs, this function only works with the density mutation assignment")
+    dummy_matrix <- array(0, c(length(sampledIters$pi), no.muts, no.timepoints))
     return(dummy_matrix)
   }
 
@@ -849,15 +887,18 @@ get_mutation_preferences <- function(GS.data, density, mut_assignments, clusteri
   localOptima <- localOptima[peak_is_cluster]
   no.optima <- length(localOptima)
 
-  S.i <- data.matrix(GS.data$S.i)
+  S.i <- GS.data$S.i
+  if (!is.integer(S.i)) {
+    storage.mode(S.i) <- "integer"
+  }
   pi.h <- GS.data$pi.h # [,,1]
 
   if (no.optima == 1) {
     # If only a single optimum was found we assign all muts to that one cluster
-    assign_ccfs <- array(0, c(length(sampledIters), no.muts, no.timepoints))
+    assign_ccfs <- array(0, c(length(sampledIters$pi), no.muts, no.timepoints))
     for (t in 1:no.timepoints) {
-      for (s in sampledIters) {
-        assign_ccfs[s - no.iters.burn.in, 1:no.muts, t] <- localOptima[1]
+      for (iter_idx in seq_along(sampledIters$pi)) {
+        assign_ccfs[iter_idx, 1:no.muts, t] <- localOptima[1]
       }
     }
   } else {
@@ -871,13 +912,15 @@ get_mutation_preferences <- function(GS.data, density, mut_assignments, clusteri
     }
 
     # Get a table with the preferred cluster CCF
-    assign_ccfs <- array(0, c(length(sampledIters), no.muts, no.timepoints))
+    assign_ccfs <- array(0, c(length(sampledIters$pi), no.muts, no.timepoints))
     for (t in 1:no.timepoints) {
-      for (s in sampledIters) {
-        for (c in unique(S.i[s, ])) {
-          bestOptimum <- sum(pi.h[s, c, t] > boundary) + 1
-          assigned.muts <- which(S.i[s, ] == c)
-          assign_ccfs[s - no.iters.burn.in, assigned.muts, t] <- localOptima[bestOptimum] # pi.h[s, c, t]
+      for (iter_idx in seq_along(sampledIters$pi)) {
+        s_pi <- sampledIters$pi[iter_idx]
+        s_state <- sampledIters$state[iter_idx]
+        for (c in unique(S.i[s_state, ])) {
+          bestOptimum <- sum(pi.h[s_pi, c, t] > boundary) + 1
+          assigned.muts <- which(S.i[s_state, ] == c)
+          assign_ccfs[iter_idx, assigned.muts, t] <- localOptima[bestOptimum] # pi.h[s, c, t]
         }
       }
     }
@@ -905,7 +948,7 @@ calc_cluster_order_probs <- function(GS.data, density, mut_assignments, clusteri
   assign_ccfs <- get_mutation_preferences(GS.data, density, mut_assignments, clusterids, cluster_ccfs, no.muts, no.timepoints, no.iters, no.iters.burn.in)
 
   num_clusters <- length(clusterids)
-  sampledIters <- no.iters - no.iters.burn.in
+  sampledIters <- dim(assign_ccfs)[1]
   if (num_clusters > 1) {
     probs_gt <- array(NA, c(length(clusterids), length(clusterids), no.timepoints))
     probs_lt <- array(NA, c(length(clusterids), length(clusterids), no.timepoints))
@@ -920,23 +963,19 @@ calc_cluster_order_probs <- function(GS.data, density, mut_assignments, clusteri
           if (length(snvs_a) == 1) {
             sampled_a <- rep(snvs_a, no.samples)
           } else {
-            sampled_a <- sample(snvs_a, no.samples, replace = T)
+            sampled_a <- sample(snvs_a, no.samples, replace = TRUE)
           }
           if (length(snvs_b) == 1) {
             sampled_b <- rep(snvs_b, no.samples)
           } else {
-            sampled_b <- sample(snvs_b, no.samples, replace = T)
+            sampled_b <- sample(snvs_b, no.samples, replace = TRUE)
           }
 
-          frac_gt <- sum(sapply(1:no.samples, function(i) {
-            (sum(assign_ccfs[, sampled_a[i], t] > assign_ccfs[, sampled_b[i], t]))
-          })) / (no.samples * sampledIters)
-          frac_lt <- sum(sapply(1:no.samples, function(i) {
-            (sum(assign_ccfs[, sampled_a[i], t] < assign_ccfs[, sampled_b[i], t]))
-          })) / (no.samples * sampledIters)
-          frac_eq <- sum(sapply(1:no.samples, function(i) {
-            (sum(assign_ccfs[, sampled_a[i], t] == assign_ccfs[, sampled_b[i], t]))
-          })) / (no.samples * sampledIters)
+          sampled_ccf_a <- assign_ccfs[, sampled_a, t, drop = FALSE]
+          sampled_ccf_b <- assign_ccfs[, sampled_b, t, drop = FALSE]
+          frac_gt <- sum(sampled_ccf_a > sampled_ccf_b) / (no.samples * sampledIters)
+          frac_lt <- sum(sampled_ccf_a < sampled_ccf_b) / (no.samples * sampledIters)
+          frac_eq <- sum(sampled_ccf_a == sampled_ccf_b) / (no.samples * sampledIters)
 
           # Filling the probability matrices as row-vs-column
           probs_gt[c, k, t] <- frac_gt

@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     libcurl4-gnutls-dev \
     libxml2-dev \
     libssl-dev \
+    libcairo2-dev \
+    libxt-dev \
     make \
     curl \
     git \

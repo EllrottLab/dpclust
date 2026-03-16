@@ -76,14 +76,17 @@ build_coassignment_prob_matrix_preferences <- function(GS.data, density, no.muts
 #' @return A matrix with a column for each SNV and a row for each to consider iteration with the cell containing the CCF
 #' @author sd11
 get_snv_assignment_ccfs <- function(pi.h, S.i, no.muts, no.timepoints, no.iters, no.iters.burn.in) {
-  print("Getting SNV assignment CCFs using C++...")
+  log_info("Getting SNV assignment CCFs using C++...")
   # Ensure pi.h is 3D even for single timepoint
   if (length(dim(pi.h)) == 2) {
     pi.h <- array(pi.h, c(dim(pi.h), 1))
   }
-  pi_h_flat <- as.numeric(pi.h)
   pi_h_dims <- as.integer(dim(pi.h))
-  res <- get_snv_assignment_ccfs_cpp(pi_h_flat, pi_h_dims, as.matrix(S.i), as.integer(no.iters.burn.in))
+  if (!is.integer(S.i)) {
+    storage.mode(S.i) <- "integer"
+  }
+  # Arrays in R are already backed by a numeric vector; pass directly to avoid flattening copy.
+  res <- get_snv_assignment_ccfs_cpp(pi.h, pi_h_dims, S.i, as.integer(no.iters.burn.in))
   return(res)
 }
 
@@ -93,10 +96,11 @@ get_snv_ccf_assignmnent_density <- function(S.i, pi.h, no.iters.burn.in, ccf_max
   snv_ccfs <- snv_ccfs[, , 1]
   snv_densities <- lapply(1:ncol(snv_ccfs), function(i) {
     if (all(snv_ccfs[, i] < ccf_max_value)) {
-      ggplot_build(ggplot(data.frame(ccf = snv_ccfs[, i])) +
-        aes(x = ccf, y = ..density..) +
-        geom_density() +
-        xlim(0, ccf_max_value))$data[[1]]$y
+      bw_val <- bw.nrd0(snv_ccfs[, i])
+      ggplot_build(ggplot(data.frame(ccf = snv_ccfs[is.finite(snv_ccfs[, i]), i])) +
+        aes(x = ccf, y = after_stat(density)) +
+        geom_density(bw = bw_val, na.rm = TRUE) +
+        coord_cartesian(xlim = c(0, ccf_max_value)))$data[[1]]$y
     } else {
       NA
     }

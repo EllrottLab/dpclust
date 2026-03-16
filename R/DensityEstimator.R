@@ -10,16 +10,19 @@ DensityEstimator <- function(clustered.thetas, thetas, density.smooth = 0.1, den
   post.ints <- matrix(NA, ncol = no.iters, nrow = 512)
 
   if (is.na(x.max)) {
-    x.max <- ceiling(max(thetas, na.rm = T) * 12) / 10
+    x.max <- ceiling(max(thetas, na.rm = TRUE) * 12) / 10
   }
   if (nrow(clustered.thetas) == 1) {
     clustered.thetas <- rbind(clustered.thetas, clustered.thetas)
   }
 
-  xx <- density(rep(clustered.thetas[, 1], 2), adjust = density.smooth, from = density.from, to = x.max)$x
+  # Calculate bandwidth manually to avoid 'not using weights' warning
+  bw_val <- bw.nrd0(rep(clustered.thetas[, 1], 2))
+  xx <- density(rep(clustered.thetas[, 1], 2), adjust = density.smooth, from = density.from, to = x.max, bw = bw_val)$x
 
   post.ints <- sapply(1:no.iters, FUN = function(i, clustered.thetas1, adjust, from, to) {
-    density(clustered.thetas[, i], adjust = adjust, from = from, to = to)$y
+    bw_val_i <- bw.nrd0(clustered.thetas[, i])
+    density(clustered.thetas[, i], adjust = adjust, from = from, to = to, bw = bw_val_i)$y
   }, clustered.thetas1 = clustered.thetas, adjust = density.smooth, from = density.from, to = x.max)
 
   polygon.data <- c(apply(post.ints, MARGIN = 1, FUN = quantile, probs = 0.975), rev(apply(post.ints, MARGIN = 1, FUN = quantile, probs = 0.025)))
@@ -42,7 +45,12 @@ Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.
   # post.burn.in.start is the number of iterations to drop from the Gibbs sampler output to allow the estimates to equilibrate on the posterior
   xlabel <- "mutation_copy_number"
   if (is.null(mutationCopyNumber)) {
-    print("No mutationCopyNumber. Using mutation burden")
+    y1_missing <- is.null(GS.data$y1) || (length(GS.data$y1) == 1 && is.na(GS.data$y1))
+    n1_missing <- is.null(GS.data$N1) || (length(GS.data$N1) == 1 && is.na(GS.data$N1))
+    if (y1_missing || n1_missing) {
+      stop("No mutationCopyNumber provided and GS.data does not contain y1/N1. Provide mutationCopyNumber/no.chrs.bearing.mut or rerun with keep_aux_fields=TRUE.")
+    }
+    log_info("No mutationCopyNumber. Using mutation burden")
     y <- GS.data$y1
     N <- GS.data$N1
     mutationCopyNumber <- y / N
@@ -88,7 +96,9 @@ Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.
     x <- x[finite_idx]
     weights <- weights[finite_idx]
     weights <- weights / sum(weights)
-    return(density(x, weights = weights, adjust = adjust, from = from, to = to))
+    # Calculate bandwidth manually to avoid 'not using weights' warning
+    bw_val <- bw.nrd0(x)
+    return(density(x, weights = weights, adjust = adjust, from = from, to = to, bw = bw_val))
   }
 
   dens_res <- clean_density_call(c(pi.h.cols[post.burn.in.start - 1, ]),
@@ -125,8 +135,8 @@ Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.
     samplename = samplename
   )
 
-  write.table(density, gsub(".png", "density.txt", pngFile), sep = "\t", col.names = c(gsub(" ", ".", xlabel), "median.density"), row.names = F, quote = F)
-  write.table(polygon.data, gsub(".png", "polygonData.txt", pngFile), sep = "\t", row.names = F, quote = F)
+  write.table(density, gsub(".png", "density.txt", pngFile), sep = "\t", col.names = c(gsub(" ", ".", xlabel), "median.density"), row.names = FALSE, quote = FALSE)
+  write.table(polygon.data, gsub(".png", "polygonData.txt", pngFile), sep = "\t", row.names = FALSE, quote = FALSE)
 
   return(list(density = data.frame(fraction.of.tumour.cells = xx, median.density = yy), polygon.data = polygon.data))
 }
@@ -199,9 +209,9 @@ Gibbs.subclone.density.est <- function(burden, GS.data, pngFile, density.smooth 
   no.density.points <- 10000
   no.clusters <- ncol(V.h.cols)
 
-  for (i in 1:length(sampledIters)) {
+  for (i in seq_along(sampledIters)) {
     if (i %% 100 == 0) {
-      print(paste(i, "/", length(sampledIters)))
+      log_info(paste(i, "/", length(sampledIters)))
     }
 
     density.data <- lapply(1:no.clusters, function(j) {
@@ -256,7 +266,7 @@ Gibbs.subclone.density.est <- function(burden, GS.data, pngFile, density.smooth 
     samplename_x = samplenames[1],
     samplename_y = samplenames[2],
     max.plotted.value = NA,
-    plot_mutations = T
+    plot_mutations = TRUE
   )
 
   # Save the data of the plot to replot lateron for figure fine tuning
@@ -283,7 +293,7 @@ Gibbs.subclone.density.est.nd <- function(burden, GS.data, density.smooth = 0.1,
   }
   C <- dim(pi.h.cols)[2]
 
-  print("Estimating density for all MCMC iterations...")
+  log_info("Estimating density for all MCMC iterations...")
   wts <- matrix(NA, nrow = dim(V.h.cols)[1], ncol = dim(V.h.cols)[2])
   wts[, 1] <- V.h.cols[, 1]
   wts[, 2] <- V.h.cols[, 2] * (1 - V.h.cols[, 1])
@@ -367,9 +377,9 @@ Gibbs.subclone.density.est.nd <- function(burden, GS.data, density.smooth = 0.1,
     # }
   }
 
-  for (i in 1:length(sampledIters)) {
+  for (i in seq_along(sampledIters)) {
     if (i %% 100 == 0) {
-      print(paste(i, "/", length(sampledIters), sep = " "))
+      log_info(paste(i, "/", length(sampledIters), sep = " "))
     }
     if (num.timepoints >= 4) {
       # use weights
@@ -384,7 +394,7 @@ Gibbs.subclone.density.est.nd <- function(burden, GS.data, density.smooth = 0.1,
     post.ints[((i - 1) * no.eval.points + 1):(i * no.eval.points)] <- d$estimate
   }
 
-  print("Estimating density confidence intervals...")
+  log_info("Estimating density confidence intervals...")
   median.density <- array(NA, gridsize)
   lower.CI <- array(NA, gridsize)
 
@@ -414,7 +424,7 @@ Gibbs.subclone.density.est.nd <- function(burden, GS.data, density.smooth = 0.1,
 
   for (i in 1:num_iters) {
     if (i %% print_status_iters == 0) {
-      print(paste(i, "/", num_iters, sep = " "))
+      log_info(paste(i, "/", num_iters, sep = " "))
     }
     indices <- (i - 1) %% gridsize[1] + 1
     for (j in 2:num.timepoints) {
