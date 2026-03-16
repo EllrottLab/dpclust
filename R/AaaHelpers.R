@@ -13,6 +13,22 @@
   !.is_na_sentinel(x)
 }
 
+.init_conflicts <- function() {
+  list(i = integer(0), j = integer(0), w = numeric(0))
+}
+
+.subset_conflicts <- function(conflicts, selection) {
+  if (!.has_value(conflicts) || length(conflicts$i) == 0) return(conflicts)
+  new_i <- match(conflicts$i, selection)
+  new_j <- match(conflicts$j, selection)
+  keep <- !is.na(new_i) & !is.na(new_j)
+  list(
+    i = as.integer(new_i[keep]),
+    j = as.integer(new_j[keep]),
+    w = as.numeric(conflicts$w[keep])
+  )
+}
+
 .has_assignment_likelihoods <- function(clustering) {
   if (!("all.assignment.likelihoods" %in% names(clustering))) {
     return(FALSE)
@@ -44,21 +60,31 @@
   bytes_per_int <- 4
   stored_iters <- .dpclust_num_stored_iters(no.iters, no.iters.burn.in, thin_s_i)
 
+  # Base R overhead + DPClust and dependency loading (approx 250 MB)
+  bytes_base <- 250 * 1024^2
+  
   bytes_pi_h <- as.numeric(no.iters) * as.numeric(max.considered.clusters) * as.numeric(no.samples) * bytes_per_double
   bytes_v_h <- as.numeric(no.iters) * as.numeric(max.considered.clusters) * bytes_per_double
   bytes_alpha <- as.numeric(no.iters) * bytes_per_double
   bytes_s_i <- as.numeric(stored_iters) * as.numeric(no.muts) * bytes_per_int
 
-  # Input matrices are typically pre-existing in R, but can be temporarily duplicated across the R<->C++ bridge.
-  bytes_inputs <- 5 * as.numeric(no.muts) * as.numeric(no.samples) * bytes_per_double
-  bytes_working <- as.numeric(no.muts) * as.numeric(no.samples) * bytes_per_double # burden_denom_inv
+  # The dataset object holds ~10 matrices of doubles [no.muts x no.samples]
+  # (WTCount, mutCount, totalCopyNumber, copyNumberAdjustment, kappa, chromosome, etc)
+  # Plus R data.frame overhead.
+  bytes_dataset <- 12 * as.numeric(no.muts) * as.numeric(no.samples) * bytes_per_double
+
+  # Mutation preferences matrix created during assignment (assume ~30 potential clusters)
+  bytes_preferences <- as.numeric(no.muts) * 30 * bytes_per_double
+
+  # Buffer for temporary copies and GC margin (20% of the major objects)
+  bytes_buffer <- (bytes_s_i + bytes_dataset) * 0.2
 
   bytes_aux <- 0
   if (keep_aux_fields) {
     bytes_aux <- 2 * as.numeric(no.muts) * as.numeric(no.samples) * bytes_per_double
   }
 
-  bytes_total <- bytes_pi_h + bytes_v_h + bytes_alpha + bytes_s_i + bytes_inputs + bytes_working + bytes_aux
+  bytes_total <- bytes_base + bytes_pi_h + bytes_v_h + bytes_alpha + bytes_s_i + bytes_dataset + bytes_preferences + bytes_buffer + bytes_aux
   gb_raw <- bytes_total / (1024^3)
 
   list(
@@ -66,11 +92,12 @@
     raw_gb = gb_raw,
     stored_iters = stored_iters,
     components_gb = c(
+      base = bytes_base / (1024^3),
       pi_h = bytes_pi_h / (1024^3),
       S_i = bytes_s_i / (1024^3),
-      V_h_alpha = (bytes_v_h + bytes_alpha) / (1024^3),
-      input_bridge = bytes_inputs / (1024^3),
-      working = bytes_working / (1024^3),
+      dataset = bytes_dataset / (1024^3),
+      preferences = bytes_preferences / (1024^3),
+      buffer = bytes_buffer / (1024^3),
       aux = bytes_aux / (1024^3)
     )
   )
@@ -104,13 +131,13 @@
 
   detail_msg <- sprintf(
     paste0(
-      "Estimated peak memory %.2f GB exceeds memory_limit_gb %.2f GB with default memory-saving settings. ",
-      "Estimated components (GB): pi.h=%.2f, S.i=%.2f, V.h+alpha=%.2f, input_bridge=%.2f, working=%.2f, aux=%.2f. ",
+      "Estimated peak memory %.2f GB exceeds memory_limit_gb %.2f GB. ",
+      "Estimated components (GB): base=%.2f, pi.h=%.2f, S.i=%.2f, dataset=%.2f, preferences=%.2f, buffer=%.2f. ",
       "Try reducing no.iters, max.considered.clusters, or num_muts_sample."
     ),
     estimate$total_gb, memory_limit_gb,
-    estimate$components_gb["pi_h"], estimate$components_gb["S_i"], estimate$components_gb["V_h_alpha"],
-    estimate$components_gb["input_bridge"], estimate$components_gb["working"], estimate$components_gb["aux"]
+    estimate$components_gb["base"], estimate$components_gb["pi_h"], estimate$components_gb["S_i"],
+    estimate$components_gb["dataset"], estimate$components_gb["preferences"], estimate$components_gb["buffer"]
   )
   stop(detail_msg)
 }

@@ -160,7 +160,7 @@ load.data.inner <- function(list_of_tables, cellularity, Chromosome, position, W
     subclonal.fraction = subclonalFraction, removed_indices = removed_indices,
     chromosome.not.filtered = chromosome.not.filtered, mut.position.not.filtered = mut.position.not.filtered,
     sampling.selection = selection, full.data = full_data, most.similar.mut = most.similar.mut,
-    mutationType = mutationType, conflict.array = NA, cellularity = cellularity, phase = phasing,
+    mutationType = mutationType, conflict.array = .init_conflicts(), cellularity = cellularity, phase = phasing,
     mutphasing = NULL
   ))
 }
@@ -311,36 +311,44 @@ add.in.cn.as.single.snv <- function(dataset, cndata, cellularity, add.conflicts 
       log_info("No potential conflicting CNA events found")
     } else {
       # The CNA events have already been added to the dataset
-      conflict.array <- array(1, c(nrow(dataset$mutCount), nrow(dataset$mutCount)))
+      conflict_list <- if (.has_value(dataset$conflict.array)) dataset$conflict.array else .init_conflicts()
 
       conflicting_mutcount <- 0
       for (i in 1:nrow(cndata)) {
-        conflict_indices <- get.conflicting.indices(dataset, cndata)
+        conflict_indices <- get.conflicting.indices(dataset, cndata[i, , drop=FALSE])
 
         # If there are no conflicts, then move on to the next CNA
         if (sum(conflict_indices, na.rm = TRUE) == 0) {
           next
         }
 
-        # There are conflicts, put them in the conficts array
+        # There are conflicts, put them in the conflicts array
         if (sum(conflict_indices) > 3) {
           log_info(paste("Found", sum(conflict_indices), "conflicts for this segment, but keeping only 1"))
           keep <- which(conflict_indices)[1]
-          conflict_indices[which(conflict_indices)] <- FALSE
+          conflict_indices[] <- FALSE
           conflict_indices[keep] <- TRUE
         }
 
         conflicting_mutcount <- conflicting_mutcount + sum(conflict_indices)
-        for (i in which(conflict_indices)) {
-          j <- which(dataset$position == cndata$startpos[i] & dataset$mutationType == "CNA")
-          conflict.array[j, i] <- 2
-          conflict.array[i, j] <- 1024 # equivalent to 10 mutations
+        for (idx_i in which(conflict_indices)) {
+          idx_j <- which(dataset$position[,1] == cndata$startpos[i] & dataset$mutationType == "CNA")
+          idx_j <- idx_j[1] # Take first pseudo-SNV for this CNA
+          
+          # Sparse append
+          conflict_list$i <- c(conflict_list$i, as.integer(idx_j))
+          conflict_list$j <- c(conflict_list$j, as.integer(idx_i))
+          conflict_list$w <- c(conflict_list$w, 2.0)
+
+          conflict_list$i <- c(conflict_list$i, as.integer(idx_i))
+          conflict_list$j <- c(conflict_list$j, as.integer(idx_j))
+          conflict_list$w <- c(conflict_list$w, 1024.0)
         }
       }
 
       log_info(paste("Found ", conflicting_mutcount, " conflicting CNA and SNVs", sep = ""))
+      dataset$conflict.array <- conflict_list
     }
-    dataset$conflict.array <- conflict.array
   }
   return(dataset)
 }
@@ -417,13 +425,13 @@ add.snv.cna.conflicts <- function(dataset, cndata) {
     log_info("No potential conflicting CNA events found")
   } else {
     # The CNA events have already been added to the dataset
-    conflict.array <- array(1, c(nrow(dataset$mutCount), nrow(dataset$mutCount)))
+    conflict_list <- if (.has_value(dataset$conflict.array)) dataset$conflict.array else .init_conflicts()
 
     conflicting_mutcount <- 0
-    for (i in 1:nrow(cndata)) {
-      conflict_indices <- dataset$chromosome[dataset$mutationType == "SNV", 1] == cndata$chr[i] &
-        dataset$position[dataset$mutationType == "SNV", 1] >= cndata$startpos[i] &
-        dataset$position[dataset$mutationType == "SNV", 1] <= cndata$endpos[i] &
+    for (idx_cna in 1:nrow(cndata)) {
+      conflict_indices <- dataset$chromosome[dataset$mutationType == "SNV", 1] == cndata$chr[idx_cna] &
+        dataset$position[dataset$mutationType == "SNV", 1] >= cndata$startpos[idx_cna] &
+        dataset$position[dataset$mutationType == "SNV", 1] <= cndata$endpos[idx_cna] &
         dataset$subclonal.fraction[dataset$mutationType == "SNV", 1] < 0.9 &
         dataset$phase[dataset$mutationType == "SNV", 1] == "MUT_ON_DELETED"
 
@@ -432,27 +440,35 @@ add.snv.cna.conflicts <- function(dataset, cndata) {
         next
       }
 
-      # There are conflicts, put them in the conficts array
+      # There are conflicts, put them in the conflicts array
       if (sum(conflict_indices) > 3) {
         log_info(paste("Found", sum(conflict_indices), "conflicts for this segment, but keeping only 1"))
         keep <- which(conflict_indices)[1]
-        conflict_indices[which(conflict_indices)] <- FALSE
+        conflict_indices[] <- FALSE
         conflict_indices[keep] <- TRUE
       }
 
       conflicting_mutcount <- conflicting_mutcount + sum(conflict_indices)
-      for (i in which(conflict_indices)) {
-        j <- which(dataset$position == cndata$startpos[i] & dataset$mutationType == "CNA")
+      snv_indices <- which(dataset$mutationType == "SNV")[conflict_indices]
+      for (idx_snv in snv_indices) {
+        j <- which(dataset$position[, 1] == cndata$startpos[idx_cna] & dataset$mutationType == "CNA")
         # If there are multiple SNVs that represent this CNA, then just take the first to not create too much weight
         j <- j[1]
-        conflict.array[j, i] <- 2
-        conflict.array[i, j] <- 1024 # equivalent to 10 mutations
+        
+        # Sparse append
+        conflict_list$i <- c(conflict_list$i, as.integer(j))
+        conflict_list$j <- c(conflict_list$j, as.integer(idx_snv))
+        conflict_list$w <- c(conflict_list$w, 2.0)
+
+        conflict_list$i <- c(conflict_list$i, as.integer(idx_snv))
+        conflict_list$j <- c(conflict_list$j, as.integer(j))
+        conflict_list$w <- c(conflict_list$w, 1024.0)
       }
     }
 
     log_info(paste("Found ", conflicting_mutcount, " conflicting CNA and SNVs", sep = ""))
+    dataset$conflict.array <- conflict_list
   }
-  dataset$conflict.array <- conflict.array
   return(dataset)
 }
 
@@ -518,7 +534,7 @@ add.mutphasing <- function(dataset, mutphasing, add.conflicts = FALSE) {
     anti.phased <- mutphasing[mutphasing$phasing == "anti-phased", ]
 
     if (.is_na_sentinel(dataset$conflict.array)) {
-      dataset$conflict.array <- array(1, c(nrow(dataset$mutCount), nrow(dataset$mutCount)))
+      dataset$conflict.array <- .init_conflicts()
     }
 
     for (i in 1:nrow(anti.phased)) {
@@ -526,22 +542,26 @@ add.mutphasing <- function(dataset, mutphasing, add.conflicts = FALSE) {
       log_info(paste(capture.output(print(anti.phased[i, ])), collapse = "\n"))
 
       # Work out index of both mutations
-      k <- which(dataset$chromosome == anti.phased$Chr[i] & dataset$position == anti.phased$Pos1[i])
-      l <- which(dataset$chromosome == anti.phased$Chr[i] & dataset$position == anti.phased$Pos2[i])
+      k <- which(dataset$chromosome[, 1] == anti.phased$Chr[i] & dataset$position[, 1] == anti.phased$Pos1[i])
+      l <- which(dataset$chromosome[, 1] == anti.phased$Chr[i] & dataset$position[, 1] == anti.phased$Pos2[i])
 
       # Check that only one hit
       if (length(k) > 1 | length(l) > 1) {
         warning("Mutation occurring more than once in add.mutphasing")
+        k <- k[1]
+        l <- l[1]
       }
 
-      # Check that the conflict array is synchronised
-      if (k > nrow(dataset$conflict.array) | l > nrow(dataset$conflict.array)) {
-        warning("Conflict array and mutation data not synchronised in add.mutphasing")
-      }
+      # Assign higher conflict status to both (symmetric)
+      # We add to weight if it exists, or initialize with 2.0 (since default is 1.0)
+      # Actually, let's just append a new entry, the C++ will sum them if needed.
+      dataset$conflict.array$i <- c(dataset$conflict.array$i, as.integer(k))
+      dataset$conflict.array$j <- c(dataset$conflict.array$j, as.integer(l))
+      dataset$conflict.array$w <- c(dataset$conflict.array$w, 1.0) # Penalty increment
 
-      # Assign higher conflict status to both
-      dataset$conflict.array[k, l] <- dataset$conflict.array[k, l] + 1
-      dataset$conflict.array[l, k] <- dataset$conflict.array[l, k] + 1
+      dataset$conflict.array$i <- c(dataset$conflict.array$i, as.integer(l))
+      dataset$conflict.array$j <- c(dataset$conflict.array$j, as.integer(k))
+      dataset$conflict.array$w <- c(dataset$conflict.array$w, 1.0)
     }
   }
   return(dataset)

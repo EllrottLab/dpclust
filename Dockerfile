@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libcairo2-dev \
     libxt-dev \
+    libgomp1 \
     make \
     curl \
     git \

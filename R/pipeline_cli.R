@@ -46,6 +46,12 @@ dpclust_cli <- function() {
     optparse::make_option(c("--sample_snvs_only"), type = "logical", default = TRUE, help = "Only sample SNVs [default: %default]", metavar = "boolean"),
     optparse::make_option(c("--generate_cluster_ordering"), type = "logical", default = FALSE, help = "Generate phylogenetic ordering [default: %default]", metavar = "boolean"),
     optparse::make_option(c("--assign_sampled_muts"), type = "logical", default = TRUE, help = "Assign mutations removed during sampling [default: %default]", metavar = "boolean"),
+    
+    # CNA / Conflict Options
+    optparse::make_option(c("--co_cluster_cna"), type = "logical", default = FALSE, help = "Co-cluster CNA events as pseudo-SNVs [default: %default]", metavar = "boolean"),
+    optparse::make_option(c("--add_conflicts"), type = "logical", default = FALSE, help = "Enable mutation-to-mutation conflict analysis [default: %default]", metavar = "boolean"),
+    optparse::make_option(c("--cna_conflicting_events_only"), type = "logical", default = FALSE, help = "Only use CNAs that conflict with SNVs [default: %default]", metavar = "boolean"),
+
     optparse::make_option(c("-k", "--keep_temp_files"), action = "store_true", default = FALSE, help = "Keep intermediate files"),
 
     # Hardware/Resources
@@ -94,28 +100,101 @@ dpclust_cli <- function() {
     }
   }
 
-  run_dpclust_pipeline(
-    run_sample = opt$run_sample,
-    data_path = opt$data_path,
-    outputdir = opt$outputdir,
-    input = opt$input,
-    prefix = opt$prefix,
-    analysis_type = opt$analysis_type,
-    iterations = opt$iterations,
-    burnin = opt$burnin,
-    mut_assignment_type = opt$mut_assignment_type,
-    num_muts_sample = opt$num_muts_sample,
-    min_muts_cluster = opt$min_muts_cluster,
-    min_frac_muts_cluster = opt$min_frac_muts_cluster,
-    seed = opt$seed,
-    species = opt$species,
-    is_male = opt$is_male,
-    sample_snvs_only = opt$sample_snvs_only,
-    generate_cluster_ordering = opt$generate_cluster_ordering,
-    assign_sampled_muts = opt$assign_sampled_muts,
-    keep_temp_files = opt$keep_temp_files,
-    num_threads = opt$num_threads,
-    memory_limit_gb = opt$memory_limit_gb
+  # ── Runtime instrumentation ──────────────────────────────────────────────────
+  # Capture start state before anything runs
+  wall_start  <- proc.time()[["elapsed"]]
+  cpu_start   <- proc.time()[c("user.self", "sys.self")]
+  gc_before   <- gc(reset = TRUE, verbose = FALSE)
+
+  run_status  <- "SUCCESS"
+  run_error   <- NULL
+
+  # on.exit guarantees the summary prints even if run_dpclust_pipeline() throws
+  on.exit({
+    wall_elapsed <- proc.time()[["elapsed"]] - wall_start
+    cpu_end      <- proc.time()[c("user.self", "sys.self")]
+    cpu_user     <- cpu_end[["user.self"]]  - cpu_start[["user.self"]]
+    cpu_sys      <- cpu_end[["sys.self"]]   - cpu_start[["sys.self"]]
+    cpu_total    <- cpu_user + cpu_sys
+    gc_after     <- gc(verbose = FALSE)
+
+    # Peak RSS — Linux /proc, macOS ps, fallback NA
+    peak_rss_mb <- tryCatch({
+      sysname <- Sys.info()[["sysname"]]
+      if (sysname == "Linux" && file.exists("/proc/self/status")) {
+        lines <- readLines("/proc/self/status", warn = FALSE)
+        vmhwm <- grep("^VmHWM:", lines, value = TRUE)
+        if (length(vmhwm)) as.numeric(gsub("[^0-9]", "", vmhwm[1])) / 1024 else NA_real_
+      } else if (sysname == "Darwin") {
+        pid <- Sys.getpid()
+        rss_kb <- suppressWarnings(system(
+          sprintf("ps -o rss= -p %d", pid), intern = TRUE))
+        if (length(rss_kb) && nchar(rss_kb[1])) as.numeric(rss_kb[1]) / 1024 else NA_real_
+      } else {
+        NA_real_
+      }
+    }, error = function(e) NA_real_)
+
+    # CPU% = top-style utilisation: can exceed 100% when multithreaded
+    # e.g. 800% means ~8 cores were fully occupied over the run
+    cpu_pct        <- if (wall_elapsed > 0) 100 * cpu_total / wall_elapsed else NA_real_
+    effective_cores <- if (wall_elapsed > 0) cpu_total / wall_elapsed else NA_real_
+
+    wall_mm <- floor(wall_elapsed / 60)
+    wall_ss <- wall_elapsed - wall_mm * 60
+
+    log_info(strrep("-", 80))
+    log_info("DPCLUST RUNTIME SUMMARY")
+    log_info(strrep("-", 80))
+    log_info(sprintf("  Status            : %s", run_status))
+    if (!is.null(run_error))
+      log_info(sprintf("  Error             : %s", conditionMessage(run_error)))
+    log_info(sprintf("  Wall time         : %dm %.1fs  (%.1f s total)", wall_mm, wall_ss, wall_elapsed))
+    log_info(sprintf("  CPU user          : %.1f s", cpu_user))
+    log_info(sprintf("  CPU sys           : %.1f s", cpu_sys))
+    log_info(sprintf("  CPU total         : %.1f s", cpu_total))
+    if (!is.na(cpu_pct))
+      log_info(sprintf("  CPU %%             : %.1f%%  (~%.1f effective cores)", cpu_pct, effective_cores))
+    if (!is.na(peak_rss_mb))
+      log_info(sprintf("  Peak RSS          : %.0f MB", peak_rss_mb))
+    log_info(sprintf("  GC Ncells (after) : %s", gc_after["Ncells", "used"]))
+    log_info(sprintf("  GC Vcells (after) : %s", gc_after["Vcells", "used"]))
+    log_info(strrep("-", 80))
+  }, add = TRUE)
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  tryCatch(
+    run_dpclust_pipeline(
+      run_sample = opt$run_sample,
+      data_path = opt$data_path,
+      outputdir = opt$outputdir,
+      input = opt$input,
+      prefix = opt$prefix,
+      analysis_type = opt$analysis_type,
+      iterations = opt$iterations,
+      burnin = opt$burnin,
+      mut_assignment_type = opt$mut_assignment_type,
+      num_muts_sample = opt$num_muts_sample,
+      min_muts_cluster = opt$min_muts_cluster,
+      min_frac_muts_cluster = opt$min_frac_muts_cluster,
+      seed = opt$seed,
+      species = opt$species,
+      is_male = opt$is_male,
+      sample_snvs_only = opt$sample_snvs_only,
+      generate_cluster_ordering = opt$generate_cluster_ordering,
+      assign_sampled_muts = opt$assign_sampled_muts,
+      keep_temp_files = opt$keep_temp_files,
+      num_threads = opt$num_threads,
+      memory_limit_gb = opt$memory_limit_gb,
+      co_cluster_cna = opt$co_cluster_cna,
+      add_conflicts = opt$add_conflicts,
+      cna_conflicting_events_only = opt$cna_conflicting_events_only
+    ),
+    error = function(e) {
+      run_status <<- "FAILED"
+      run_error  <<- e
+      stop(e)   # re-raise so R CMD BATCH exit code is non-zero
+    }
   )
 }
 
@@ -130,7 +209,10 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                  sample_snvs_only = TRUE, generate_cluster_ordering = FALSE,
                                  assign_sampled_muts = TRUE,
                                  keep_temp_files = FALSE, num_threads = NA,
-                                 memory_limit_gb = NA) {
+                                 memory_limit_gb = NA,
+                                 co_cluster_cna = FALSE,
+                                 add_conflicts = FALSE,
+                                 cna_conflicting_events_only = FALSE) {
   options(bitmapType = "cairo")
   options(rgl.useNULL = TRUE)
 
@@ -219,6 +301,11 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
   datpath <- if (is.null(data_path)) "" else data_path
   sample_params <- make_sample_params(datafiles, cellularity, is_male, samplename, subsamples, mutphasingfiles, datpath = datpath, cndatafiles = cndatafiles)
   advanced_params <- make_advanced_params(seed)
+  cna_params <- list(
+    co_cluster_cna = co_cluster_cna,
+    add.conflicts = add_conflicts,
+    cna.conflicting.events.only = cna_conflicting_events_only
+  )
 
   # Run clustering
   RunDP(
@@ -226,7 +313,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     run_params = run_params,
     sample_params = sample_params,
     advanced_params = advanced_params,
-    outdir = outputdir
+    outdir = outputdir,
+    cna_params = cna_params
   )
 
   # Save run parameters

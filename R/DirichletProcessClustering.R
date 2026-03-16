@@ -335,7 +335,8 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       max.considered.clusters = max.considered.clusters,
       thin_s_i = thin_s_i,
       keep_aux_fields = keep_aux_fields,
-      num_threads = num_threads
+      num_threads = num_threads,
+      conflict.array = dataset$conflict.array
     )
   } else if (analysis_type == "replot_1d") {
     log_info("Running Remaking plots...")
@@ -637,7 +638,8 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
       no.muts = nrow(dataset$mutCount),
       no.timepoints = ncol(dataset$mutCount),
       no.iters = no.iters,
-      no.iters.burn.in = no.iters.burn.in
+      no.iters.burn.in = no.iters.burn.in,
+      num_threads = num_threads
     )
     conf <- data.frame(conf)
     colnames(conf) <- c("cluster.no", "timepoint", "loc_conf_0.025", "loc_conf_0.500", "loc_conf_0.975")
@@ -654,10 +656,11 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
       no.timepoints = ncol(dataset$mutCount),
       no.iters = no.iters,
       no.iters.burn.in = no.iters.burn.in,
-      no.samples = no.samples.cluster.order
+      no.samples = no.samples.cluster.order,
+      num_threads = num_threads
     )
     probs <- flatten_3d_to_2d(probs$classification, c("timepoint", clustering$cluster.locations[, 1]))
-    write.table(probs, file = paste(outfiles.prefix, "_clusterOrderProbabilities.txt", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
+    fwrite(probs, file = paste(outfiles.prefix, "_clusterOrderProbabilities.txt", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
   }
 
   ########################################################################
@@ -695,7 +698,7 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
       clustering$best.node.assignments[snv_index]
     )
     colnames(snv_assignment_likelihoods) <- c("chr", "start", "end", cluster_prob_colnames, "most.likely.cluster")
-    write.table(snv_assignment_likelihoods, file = paste(outfiles.prefix, "_mutationClusterLikelihoods.bed", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
+    fwrite(snv_assignment_likelihoods, file = paste(outfiles.prefix, "_mutationClusterLikelihoods.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
 
     if (any(dataset$mutationType == "CNA")) {
       cna_index <- dataset$mutationType == "CNA"
@@ -707,7 +710,7 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
         clustering$best.node.assignments[cna_index]
       )
       colnames(cna.assignment.likelihoods) <- c("chr", "start", "end", cluster_prob_colnames, "most.likely.cluster")
-      write.table(cna.assignment.likelihoods, file = paste(outfiles.prefix, "_mutationClusterLikelihoodsPseudoSNV.bed", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
+      fwrite(cna.assignment.likelihoods, file = paste(outfiles.prefix, "_mutationClusterLikelihoodsPseudoSNV.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
     }
   }
 
@@ -743,13 +746,13 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
   # Save the consensus mutation assignments
   ########################################################################
   colnames(output) <- c("chr", "start", "end", "cluster", "likelihood")
-  write.table(output[dataset$mutationType == "SNV", ], file = paste(outfiles.prefix, "_bestConsensusAssignments.bed", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
+  fwrite(output[dataset$mutationType == "SNV", ], file = paste(outfiles.prefix, "_bestConsensusAssignments.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
 
   ########################################################################
   # Save the CNA assignments separately
   ########################################################################
   if (any(dataset$mutationType == "CNA")) {
-    write.table(output[dataset$mutationType == "CNA", ], file = paste(outfiles.prefix, "_bestConsensusAssignmentsPseudoSNV.bed", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
+    fwrite(output[dataset$mutationType == "CNA", ], file = paste(outfiles.prefix, "_bestConsensusAssignmentsPseudoSNV.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
     # Assign the CNAs to clusters using their pseudoSNV representations
     cndata <- assign_cnas_to_clusters(dataset$cndata, output)
     write.table(cndata, file = paste(outfiles.prefix, "_bestCNAassignments.txt", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
@@ -912,7 +915,7 @@ flatten_3d_to_2d <- function(data, col_names) {
 #' @param mutationTypes Vector with mutation types, used for plotting
 #' @param max.considered.clusters Maximum number of clusters to consider
 #' @author sd11
-DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_) {
+DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_, conflict.array = .init_conflicts()) {
   output_folder <- normalizePath(output_folder, mustWork = FALSE)
   if (!dir.exists(output_folder)) {
     dir.create(output_folder, recursive = TRUE, showWarnings = FALSE)
@@ -940,7 +943,8 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
     C = max.considered.clusters,
     keep_aux_fields = keep_aux_fields,
     num_threads = num_threads,
-    stored_iters = stored_iters
+    stored_iters = stored_iters,
+    conflict.array = conflict.array
   )
 
   save(file = file.path(output_folder, paste(samplename, "_gsdata.RData", sep = "")), GS.data)
@@ -963,7 +967,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
           samplenames = paste(samplename, subsamplesrun[c(i, j)], sep = ""),
           indices = c(i, j)
         )
-        save(file = file.path(output_folder, paste(samplename, subsamplesrun[i], subsamplesrun[j], "_densityoutput.RData", sep = "")), GS.data, density)
+        save(file = file.path(output_folder, paste(samplename, subsamplesrun[i], subsamplesrun[j], "_densityoutput.RData", sep = "")), density)
       }
     }
 
@@ -976,7 +980,8 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
         copyNumberAdjustment = copyNumberAdjustment,
         GS.data = GS.data,
         density.smooth = 0.01,
-        opts = opts
+        opts = opts,
+        num_threads = num_threads
       )
     } else if (mut.assignment.type == 2) {
       consClustering <- mutation_assignment_em(
@@ -1023,7 +1028,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
     if (mut.assignment.type == 1) {
       subclonal.fraction <- mutation.copy.number / copyNumberAdjustment
       subclonal.fraction[is.nan(subclonal.fraction)] <- 0
-      consClustering <- oneDimensionalClustering(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in, outdir = output_folder)
+      consClustering <- oneDimensionalClustering(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in, outdir = output_folder, num_threads = num_threads)
     } else if (mut.assignment.type == 2) {
       consClustering <- mutation_assignment_em(
         GS.data = GS.data,

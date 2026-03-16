@@ -25,7 +25,7 @@ resolve_sampled_iters <- function(sampledIters, GS.data) {
 #' @param no.iters.burn.in Number of iterations to discard as burn in
 #' @return Standardised mutation clustering output, including clusters, mutation assignments and likelihoods
 #' @author dw9, sd11
-oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in, outdir = ".") {
+oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in, outdir = ".", num_threads = -1) {
   no.muts <- length(subclonal.fraction)
   normal.copy.number <- rep(2, no.muts)
   post.burn.in.start <- no.iters.burn.in
@@ -70,7 +70,8 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
       pi.h,
       boundary,
       as.integer(sampledIters$pi),
-      as.integer(sampledIters$state)
+      as.integer(sampledIters$state),
+      num_threads = num_threads
     )
 
     # Drop clusters with all probs for mutations zero
@@ -85,7 +86,7 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
     most.likely.cluster <- max.col(mutation.preferences)
     out <- cbind(mutation.preferences, most.likely.cluster)
     colnames(out)[(ncol(out) - no.optima):ncol(out)] <- c(paste("prob.cluster", 1:ncol(mutation.preferences), sep = ""), "most.likely.cluster")
-    write.table(out, file.path(outdir, paste0(samplename, "_DP_and_cluster_info.txt")), sep = "\t", row.names = FALSE, quote = FALSE)
+    fwrite(as.data.frame(out), file.path(outdir, paste0(samplename, "_DP_and_cluster_info.txt")), sep = "\t", row.names = FALSE, quote = FALSE)
 
     # Assemble a table with mutation assignments to each cluster
     cluster_assignment_counts <- sapply(1:ncol(mutation.preferences), function(x, m) {
@@ -390,7 +391,7 @@ mutation_assignment_em <- function(GS.data, mutCount, WTCount, subclonal.fractio
 #' @param opts List with parameters, including donorname (samplename), individual samplenames (subsamples) and iterations and burnin
 #' @return List with various standardised clustering results, including cluster positions, assignments and probabilities
 #' @author dw9, sd11
-multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustment, GS.data, density.smooth, opts) {
+multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustment, GS.data, density.smooth, opts, num_threads = -1) {
   #
   # Uses clustering in multi dimensions to obtain a likelihood across all iterations for each mutation
   # The cluster where a mutation is assigned most often is deemed the most likeli destination.
@@ -546,7 +547,8 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
       vector.length,
       vector.direction,
       as.integer(sampledIters$pi),
-      as.integer(sampledIters$state)
+      as.integer(sampledIters$state),
+      num_threads = num_threads
     )
     most.likely.cluster <- max.col(mutation.preferences)
     assignment.likelihood <- mutation.preferences[cbind(1:no.muts, most.likely.cluster)]
@@ -585,21 +587,36 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
     #       }
     # }
     # new method - 210714 - should be intermediate between previous methods
+    # Memory-efficient quantile calculation - 2024 fix
+    # Avoids building giant 3D arrays that hit the memory wall
     quantiles <- array(NA, c(no.optima, no.subsamples, 3))
-    sampled.thetas <- list()
     totals <- table(factor(most.likely.cluster, levels = 1:no.optima))
+    
     for (i in 1:no.optima) {
-      sampled.thetas[[i]] <- array(NA, c(length(sampledIters$pi), totals[i], no.subsamples))
+      if (totals[i] == 0) next
+      
+      # We only need the median of this cluster per iteration to get the final CIs
+      iteration_medians <- matrix(NA, nrow = length(sampledIters$pi), ncol = no.subsamples)
+      cluster_mask <- (most.likely.cluster == i)
+      
       for (s in seq_along(sampledIters$pi)) {
         s_pi <- sampledIters$pi[s]
         s_state <- sampledIters$state[s]
-        sampled.thetas[[i]][s, , ] <- GS.data$pi.h[s_pi, S.i[s_state, most.likely.cluster == i], ]
+        
+        # Get location values for all mutations in this cluster for this iteration
+        # dimensions: [muts_in_cluster, no_subsamples]
+        vals <- GS.data$pi.h[s_pi, S.i[s_state, cluster_mask], ]
+        
+        if (totals[i] == 1) {
+          iteration_medians[s, ] <- vals
+        } else {
+          # Compute median per sample/timepoint for this cluster in this iteration
+          iteration_medians[s, ] <- apply(vals, 2, median)
+        }
       }
+      
       for (s in 1:no.subsamples) {
-        median.sampled.vals <- sapply(seq_along(sampledIters$pi), function(x) {
-          median(sampled.thetas[[i]][x, , s])
-        })
-        quantiles[i, s, ] <- quantile(median.sampled.vals, probs = c(0.025, 0.5, 0.975), na.rm = TRUE)
+        quantiles[i, s, ] <- quantile(iteration_medians[, s], probs = c(0.025, 0.5, 0.975), na.rm = TRUE)
       }
     }
 
@@ -845,8 +862,8 @@ getClusterDensity <- function(clustering_density, cluster_locations, min.window.
 #' @param no.iters.burn.in Number of iterations to use as burn-in
 #' @return A data.frame with the confidence intervals for each cluster
 #' @author sd11
-calc_cluster_conf_intervals <- function(GS.data, mut_assignments, clusterids, no.muts, no.timepoints, no.iters, no.iters.burn.in) {
-  assign_ccfs <- get_snv_assignment_ccfs(GS.data$pi.h, GS.data$S.i, no.muts, no.timepoints, no.iters, no.iters.burn.in)
+calc_cluster_conf_intervals <- function(GS.data, mut_assignments, clusterids, no.muts, no.timepoints, no.iters, no.iters.burn.in, num_threads = -1) {
+  assign_ccfs <- get_snv_assignment_ccfs(GS.data$pi.h, GS.data$S.i, no.muts, no.timepoints, no.iters, no.iters.burn.in, num_threads = num_threads)
   cluster_intervals <- data.frame()
   for (t in 1:no.timepoints) {
     for (i in seq_along(clusterids)) {
@@ -917,11 +934,12 @@ get_mutation_preferences <- function(GS.data, density, mut_assignments, clusteri
       for (iter_idx in seq_along(sampledIters$pi)) {
         s_pi <- sampledIters$pi[iter_idx]
         s_state <- sampledIters$state[iter_idx]
-        for (c in unique(S.i[s_state, ])) {
-          bestOptimum <- sum(pi.h[s_pi, c, t] > boundary) + 1
-          assigned.muts <- which(S.i[s_state, ] == c)
-          assign_ccfs[iter_idx, assigned.muts, t] <- localOptima[bestOptimum] # pi.h[s, c, t]
-        }
+        iter_states <- S.i[s_state, ]
+        unique_clusters <- unique(iter_states)
+        # Vectorized mapping for all mutations in this iteration
+        optima_indices <- vapply(unique_clusters, function(c) sum(pi.h[s_pi, c, t] > boundary) + 1, integer(1))
+        map_optima <- localOptima[optima_indices]
+        assign_ccfs[iter_idx, , t] <- map_optima[match(iter_states, unique_clusters)]
       }
     }
   }
@@ -944,7 +962,7 @@ get_mutation_preferences <- function(GS.data, density, mut_assignments, clusteri
 #' @return A array multi-dimensional array with in each cell whether the column cluster has a higher CCF than the row cluster across the samples in the third dimension
 #' @author sd11
 #' Note: This approach only works with the density based mutation assignment strategy
-calc_cluster_order_probs <- function(GS.data, density, mut_assignments, clusterids, cluster_ccfs, no.muts, no.timepoints, no.iters, no.iters.burn.in, no.samples = 1000) {
+calc_cluster_order_probs <- function(GS.data, density, mut_assignments, clusterids, cluster_ccfs, no.muts, no.timepoints, no.iters, no.iters.burn.in, no.samples = 1000, num_threads = -1) {
   assign_ccfs <- get_mutation_preferences(GS.data, density, mut_assignments, clusterids, cluster_ccfs, no.muts, no.timepoints, no.iters, no.iters.burn.in)
 
   num_clusters <- length(clusterids)

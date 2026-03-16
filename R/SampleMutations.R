@@ -82,9 +82,9 @@ sample_mutations = function(dataset, num_muts_sample, min_sampling_factor=1.5, s
   mutationType = dataset$mutationType[selection]
   phase = dataset$phase[selection,]
   if (.has_value(dataset$conflict.array)) {
-    conflict.array = dataset$conflict.array[selection, selection]
+    conflict.array = .subset_conflicts(dataset$conflict.array, selection)
   } else {
-    conflict.array = NA
+    conflict.array = .init_conflicts()
   }
 
   # Don't update these - maybe this should be done, but not like this as the removed_indices matrix remains the same size as CNAs are added

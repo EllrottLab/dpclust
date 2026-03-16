@@ -10,9 +10,20 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// omp_thread_count_cpp
+int omp_thread_count_cpp(int requested);
+RcppExport SEXP _DPClust_omp_thread_count_cpp(SEXP requestedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type requested(requestedSEXP);
+    rcpp_result_gen = Rcpp::wrap(omp_thread_count_cpp(requested));
+    return rcpp_result_gen;
+END_RCPP
+}
 // subclone_dirichlet_gibbs_cpp
-List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount, NumericMatrix totalCopyNumber, NumericMatrix normalCopyNumber, NumericMatrix copyNumberAdjustment, int C, NumericVector cellularity, int iter, double conc_param, double cluster_conc, bool keep_aux_fields, int num_threads, IntegerVector stored_iters, Function log_func);
-RcppExport SEXP _DPClust_subclone_dirichlet_gibbs_cpp(SEXP mutCountSEXP, SEXP WTCountSEXP, SEXP totalCopyNumberSEXP, SEXP normalCopyNumberSEXP, SEXP copyNumberAdjustmentSEXP, SEXP CSEXP, SEXP cellularitySEXP, SEXP iterSEXP, SEXP conc_paramSEXP, SEXP cluster_concSEXP, SEXP keep_aux_fieldsSEXP, SEXP num_threadsSEXP, SEXP stored_itersSEXP, SEXP log_funcSEXP) {
+List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount, NumericMatrix totalCopyNumber, NumericMatrix normalCopyNumber, NumericMatrix copyNumberAdjustment, int C, NumericVector cellularity, int iter, double conc_param, double cluster_conc, bool keep_aux_fields, int num_threads, IntegerVector stored_iters, IntegerVector conflict_i, IntegerVector conflict_j, NumericVector conflict_w, Function log_func);
+RcppExport SEXP _DPClust_subclone_dirichlet_gibbs_cpp(SEXP mutCountSEXP, SEXP WTCountSEXP, SEXP totalCopyNumberSEXP, SEXP normalCopyNumberSEXP, SEXP copyNumberAdjustmentSEXP, SEXP CSEXP, SEXP cellularitySEXP, SEXP iterSEXP, SEXP conc_paramSEXP, SEXP cluster_concSEXP, SEXP keep_aux_fieldsSEXP, SEXP num_threadsSEXP, SEXP stored_itersSEXP, SEXP conflict_iSEXP, SEXP conflict_jSEXP, SEXP conflict_wSEXP, SEXP log_funcSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -29,14 +40,17 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type keep_aux_fields(keep_aux_fieldsSEXP);
     Rcpp::traits::input_parameter< int >::type num_threads(num_threadsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type stored_iters(stored_itersSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type conflict_i(conflict_iSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type conflict_j(conflict_jSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type conflict_w(conflict_wSEXP);
     Rcpp::traits::input_parameter< Function >::type log_func(log_funcSEXP);
-    rcpp_result_gen = Rcpp::wrap(subclone_dirichlet_gibbs_cpp(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, log_func));
+    rcpp_result_gen = Rcpp::wrap(subclone_dirichlet_gibbs_cpp(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, conflict_i, conflict_j, conflict_w, log_func));
     return rcpp_result_gen;
 END_RCPP
 }
 // assign_mutations_1d_cpp
-NumericMatrix assign_mutations_1d_cpp(IntegerMatrix S_i, NumericMatrix pi_h, NumericVector boundary, IntegerVector sampledIters_pi, IntegerVector sampledIters_state);
-RcppExport SEXP _DPClust_assign_mutations_1d_cpp(SEXP S_iSEXP, SEXP pi_hSEXP, SEXP boundarySEXP, SEXP sampledIters_piSEXP, SEXP sampledIters_stateSEXP) {
+NumericMatrix assign_mutations_1d_cpp(IntegerMatrix S_i, NumericMatrix pi_h, NumericVector boundary, IntegerVector sampledIters_pi, IntegerVector sampledIters_state, int num_threads);
+RcppExport SEXP _DPClust_assign_mutations_1d_cpp(SEXP S_iSEXP, SEXP pi_hSEXP, SEXP boundarySEXP, SEXP sampledIters_piSEXP, SEXP sampledIters_stateSEXP, SEXP num_threadsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -45,13 +59,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type boundary(boundarySEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type sampledIters_pi(sampledIters_piSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type sampledIters_state(sampledIters_stateSEXP);
-    rcpp_result_gen = Rcpp::wrap(assign_mutations_1d_cpp(S_i, pi_h, boundary, sampledIters_pi, sampledIters_state));
+    Rcpp::traits::input_parameter< int >::type num_threads(num_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(assign_mutations_1d_cpp(S_i, pi_h, boundary, sampledIters_pi, sampledIters_state, num_threads));
     return rcpp_result_gen;
 END_RCPP
 }
 // assign_mutations_nd_cpp
-NumericMatrix assign_mutations_nd_cpp(IntegerMatrix S_i, NumericVector pi_h_flat, IntegerVector pi_h_dims, NumericMatrix boundary, NumericVector plane_vector_flat, NumericMatrix vector_length, LogicalMatrix vector_direction, IntegerVector sampledIters_pi, IntegerVector sampledIters_state);
-RcppExport SEXP _DPClust_assign_mutations_nd_cpp(SEXP S_iSEXP, SEXP pi_h_flatSEXP, SEXP pi_h_dimsSEXP, SEXP boundarySEXP, SEXP plane_vector_flatSEXP, SEXP vector_lengthSEXP, SEXP vector_directionSEXP, SEXP sampledIters_piSEXP, SEXP sampledIters_stateSEXP) {
+NumericMatrix assign_mutations_nd_cpp(IntegerMatrix S_i, NumericVector pi_h_flat, IntegerVector pi_h_dims, NumericMatrix boundary, NumericVector plane_vector_flat, NumericMatrix vector_length, LogicalMatrix vector_direction, IntegerVector sampledIters_pi, IntegerVector sampledIters_state, int num_threads);
+RcppExport SEXP _DPClust_assign_mutations_nd_cpp(SEXP S_iSEXP, SEXP pi_h_flatSEXP, SEXP pi_h_dimsSEXP, SEXP boundarySEXP, SEXP plane_vector_flatSEXP, SEXP vector_lengthSEXP, SEXP vector_directionSEXP, SEXP sampledIters_piSEXP, SEXP sampledIters_stateSEXP, SEXP num_threadsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -64,13 +79,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< LogicalMatrix >::type vector_direction(vector_directionSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type sampledIters_pi(sampledIters_piSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type sampledIters_state(sampledIters_stateSEXP);
-    rcpp_result_gen = Rcpp::wrap(assign_mutations_nd_cpp(S_i, pi_h_flat, pi_h_dims, boundary, plane_vector_flat, vector_length, vector_direction, sampledIters_pi, sampledIters_state));
+    Rcpp::traits::input_parameter< int >::type num_threads(num_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(assign_mutations_nd_cpp(S_i, pi_h_flat, pi_h_dims, boundary, plane_vector_flat, vector_length, vector_direction, sampledIters_pi, sampledIters_state, num_threads));
     return rcpp_result_gen;
 END_RCPP
 }
 // get_snv_assignment_ccfs_cpp
-NumericVector get_snv_assignment_ccfs_cpp(NumericVector pi_h_flat, IntegerVector pi_h_dims, IntegerMatrix S_i, int no_iters_burn_in);
-RcppExport SEXP _DPClust_get_snv_assignment_ccfs_cpp(SEXP pi_h_flatSEXP, SEXP pi_h_dimsSEXP, SEXP S_iSEXP, SEXP no_iters_burn_inSEXP) {
+NumericVector get_snv_assignment_ccfs_cpp(NumericVector pi_h_flat, IntegerVector pi_h_dims, IntegerMatrix S_i, int no_iters_burn_in, int num_threads);
+RcppExport SEXP _DPClust_get_snv_assignment_ccfs_cpp(SEXP pi_h_flatSEXP, SEXP pi_h_dimsSEXP, SEXP S_iSEXP, SEXP no_iters_burn_inSEXP, SEXP num_threadsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -78,16 +94,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< IntegerVector >::type pi_h_dims(pi_h_dimsSEXP);
     Rcpp::traits::input_parameter< IntegerMatrix >::type S_i(S_iSEXP);
     Rcpp::traits::input_parameter< int >::type no_iters_burn_in(no_iters_burn_inSEXP);
-    rcpp_result_gen = Rcpp::wrap(get_snv_assignment_ccfs_cpp(pi_h_flat, pi_h_dims, S_i, no_iters_burn_in));
+    Rcpp::traits::input_parameter< int >::type num_threads(num_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(get_snv_assignment_ccfs_cpp(pi_h_flat, pi_h_dims, S_i, no_iters_burn_in, num_threads));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_DPClust_subclone_dirichlet_gibbs_cpp", (DL_FUNC) &_DPClust_subclone_dirichlet_gibbs_cpp, 14},
-    {"_DPClust_assign_mutations_1d_cpp", (DL_FUNC) &_DPClust_assign_mutations_1d_cpp, 5},
-    {"_DPClust_assign_mutations_nd_cpp", (DL_FUNC) &_DPClust_assign_mutations_nd_cpp, 9},
-    {"_DPClust_get_snv_assignment_ccfs_cpp", (DL_FUNC) &_DPClust_get_snv_assignment_ccfs_cpp, 4},
+    {"_DPClust_omp_thread_count_cpp", (DL_FUNC) &_DPClust_omp_thread_count_cpp, 1},
+    {"_DPClust_subclone_dirichlet_gibbs_cpp", (DL_FUNC) &_DPClust_subclone_dirichlet_gibbs_cpp, 17},
+    {"_DPClust_assign_mutations_1d_cpp", (DL_FUNC) &_DPClust_assign_mutations_1d_cpp, 6},
+    {"_DPClust_assign_mutations_nd_cpp", (DL_FUNC) &_DPClust_assign_mutations_nd_cpp, 10},
+    {"_DPClust_get_snv_assignment_ccfs_cpp", (DL_FUNC) &_DPClust_get_snv_assignment_ccfs_cpp, 5},
     {NULL, NULL, 0}
 };
 

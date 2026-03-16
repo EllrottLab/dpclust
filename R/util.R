@@ -75,7 +75,7 @@ build_coassignment_prob_matrix_preferences <- function(GS.data, density, no.muts
 #' @param no.iters.burn.in The total number of iterations to use as burnin
 #' @return A matrix with a column for each SNV and a row for each to consider iteration with the cell containing the CCF
 #' @author sd11
-get_snv_assignment_ccfs <- function(pi.h, S.i, no.muts, no.timepoints, no.iters, no.iters.burn.in) {
+get_snv_assignment_ccfs <- function(pi.h, S.i, no.muts, no.timepoints, no.iters, no.iters.burn.in, num_threads = -1) {
   log_info("Getting SNV assignment CCFs using C++...")
   # Ensure pi.h is 3D even for single timepoint
   if (length(dim(pi.h)) == 2) {
@@ -86,23 +86,20 @@ get_snv_assignment_ccfs <- function(pi.h, S.i, no.muts, no.timepoints, no.iters,
     storage.mode(S.i) <- "integer"
   }
   # Arrays in R are already backed by a numeric vector; pass directly to avoid flattening copy.
-  res <- get_snv_assignment_ccfs_cpp(pi.h, pi_h_dims, S.i, as.integer(no.iters.burn.in))
+  res <- get_snv_assignment_ccfs_cpp(pi.h, pi_h_dims, S.i, as.integer(no.iters.burn.in), num_threads = num_threads)
   return(res)
 }
 
 #' Helper function that builds the a density over assignment CCFs for each mutation
-get_snv_ccf_assignmnent_density <- function(S.i, pi.h, no.iters.burn.in, ccf_max_value = 10) {
-  snv_ccfs <- get_snv_assignment_ccfs(pi.h, S.i, ncol(S.i), dim(pi.h)[3], nrow(S.i), no.iters.burn.in)
+get_snv_ccf_assignmnent_density <- function(S.i, pi.h, no.iters.burn.in, ccf_max_value = 10, num_threads = -1) {
+  snv_ccfs <- get_snv_assignment_ccfs(pi.h, S.i, ncol(S.i), dim(pi.h)[3], nrow(S.i), no.iters.burn.in, num_threads = num_threads)
   snv_ccfs <- snv_ccfs[, , 1]
   snv_densities <- lapply(1:ncol(snv_ccfs), function(i) {
     if (all(snv_ccfs[, i] < ccf_max_value)) {
-      bw_val <- bw.nrd0(snv_ccfs[, i])
-      ggplot_build(ggplot(data.frame(ccf = snv_ccfs[is.finite(snv_ccfs[, i]), i])) +
-        aes(x = ccf, y = after_stat(density)) +
-        geom_density(bw = bw_val, na.rm = TRUE) +
-        coord_cartesian(xlim = c(0, ccf_max_value)))$data[[1]]$y
+      d <- density(snv_ccfs[is.finite(snv_ccfs[, i]), i], bw = "nrd0", n = 512, from = 0, to = ccf_max_value)
+      return(d$y)
     } else {
-      NA
+      return(NA)
     }
   })
   snv_densities <- lapply(snv_densities, function(dat) {
