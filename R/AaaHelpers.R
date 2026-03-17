@@ -18,7 +18,9 @@
 }
 
 .subset_conflicts <- function(conflicts, selection) {
-  if (!.has_value(conflicts) || length(conflicts$i) == 0) return(conflicts)
+  if (!.has_value(conflicts) || length(conflicts$i) == 0) {
+    return(conflicts)
+  }
   new_i <- match(conflicts$i, selection)
   new_j <- match(conflicts$j, selection)
   keep <- !is.na(new_i) & !is.na(new_j)
@@ -62,7 +64,7 @@
 
   # Base R overhead + DPClust and dependency loading (approx 250 MB)
   bytes_base <- 250 * 1024^2
-  
+
   bytes_pi_h <- as.numeric(no.iters) * as.numeric(max.considered.clusters) * as.numeric(no.samples) * bytes_per_double
   bytes_v_h <- as.numeric(no.iters) * as.numeric(max.considered.clusters) * bytes_per_double
   bytes_alpha <- as.numeric(no.iters) * bytes_per_double
@@ -140,4 +142,51 @@
     estimate$components_gb["dataset"], estimate$components_gb["preferences"], estimate$components_gb["buffer"]
   )
   stop(detail_msg)
+}
+# High-performance parallel save that preserves standard .RData compatibility.
+# Uses a pipe to pigz (Parallel Implementation of GZip) if available.
+.parallel_save <- function(list_to_save, file_name, num_threads = NA_integer_) {
+  if (is.na(num_threads)) {
+    num_threads <- 4
+  }
+
+  # Priority list of parallel compression tools
+  parallel_tools <- list(
+    list(cmd = "pigz", args = "-6 -p %d"),
+    list(cmd = "bgzip", args = "-@ %d -c")
+  )
+
+  selected_tool <- NULL
+  for (tool in parallel_tools) {
+    # Sys.which is the standard R way to find an executable in the PATH.
+    found_path <- Sys.which(tool$cmd)
+    if (found_path != "" && file.access(found_path, 1) == 0) {
+      selected_tool <- tool
+      selected_tool$full_path <- as.character(found_path)
+      break
+    }
+  }
+
+  # Capture the environment of the caller
+  caller_env <- parent.frame()
+
+  if (!is.null(selected_tool)) {
+    # Parallel hack: R outputs binary to a pipe, tool compresses it using many cores.
+    log_info(sprintf("Parallelizing .RData compression using %s (%d threads)...", selected_tool$cmd, num_threads))
+    log_debug(sprintf("Using parallel tool at: %s", selected_tool$full_path))
+
+    # Standard balance between speed and size (Gzip level 6)
+    # We use the full path to avoid any ambiguity during execution.
+    con_cmd <- sprintf("%s %s > %s", selected_tool$full_path, sprintf(selected_tool$args, num_threads), file_name)
+    con <- pipe(con_cmd, "wb")
+
+    on.exit(close(con))
+    save(list = list_to_save, file = con, compress = FALSE, envir = caller_env)
+  } else {
+    # Fallback: standard synchronous compression.
+    log_info("Parallel compression tool (pigz/bgzip) not found in PATH.")
+    log_info(sprintf("Current PATH: %s", Sys.getenv("PATH")))
+    log_info("Falling back to standard synchronous (slow) compression...")
+    save(list = list_to_save, file = file_name, compress = TRUE, envir = caller_env)
+  }
 }

@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     bedtools \
+    pigz \
+    tabix \
+    libdeflate-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. OPTIMIZATION: Configure Posit Binary Repository for Ubuntu Noble

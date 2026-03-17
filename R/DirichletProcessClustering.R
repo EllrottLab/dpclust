@@ -22,7 +22,7 @@
 #' @return A list containing these components
 #' @author sd11
 #' @export
-make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE) {
+make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL) {
   if (is.null(supported_chroms)) {
     if (species == "human" | species == "Human") {
       # Set the expected chromosomes based on the sex
@@ -47,7 +47,8 @@ make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num
     no.iters = no.iters, no.iters.burn.in = no.iters.burn.in, mut.assignment.type = mut.assignment.type,
     supported_chroms = supported_chroms, num_muts_sample = num_muts_sample, assign_sampled_muts = assign_sampled_muts, keep_temp_files = keep_temp_files,
     generate_cluster_ordering = generate_cluster_ordering, species = species, min_muts_cluster = min_muts_cluster, min_frac_muts_cluster = min_frac_muts_cluster,
-    memory_limit_gb = memory_limit_gb, num_threads = num_threads, sample.snvs.only = sample.snvs.only, remove.snvs = remove.snvs
+    memory_limit_gb = memory_limit_gb, num_threads = num_threads, sample.snvs.only = sample.snvs.only, remove.snvs = remove.snvs,
+    prefix = prefix
   ))
 }
 
@@ -165,14 +166,17 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
   }
 
   # Path for output files
-  outfiles.prefix <- file.path(outdir, paste(samplename, "_", no.iters, "iters_", no.iters.burn.in, "burnin", sep = ""))
+  prefix_str <- if (!is.null(prefix) && !is.na(prefix) && nchar(prefix) > 0) paste0("_", prefix) else ""
+  outfiles.prefix <- file.path(outdir, paste0(samplename, prefix_str, "_", no.iters, "iters_", no.iters.burn.in, "burnin"))
 
   #####################################################################################
   # Loading data
   #####################################################################################
   log_info("Loading data...")
   # Load data from disk if there was already a dataset object, otherwise create a new one
-  rdata_file_name <- paste(paste0("Seed-", seed), paste0("Date-", chartr(" ", "_", Sys.time())), "dataset.RData", sep = "_")
+  # Use a stable filename based on prefix (if any) to ensure we can overwrite/reuse instead of creating timestamped clutter.
+  prefix_tag <- if (!is.null(prefix) && !is.na(prefix) && nchar(prefix) > 0) paste0(prefix, "_") else ""
+  rdata_file_name <- paste0(prefix_tag, "Seed-", seed, "_dataset.RData")
   if (file.exists(paste(outdir, "/", rdata_file_name, sep = ""))) {
     load(file.path(outdir, rdata_file_name))
     cndata <- dataset$cndata
@@ -336,8 +340,10 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       thin_s_i = thin_s_i,
       keep_aux_fields = keep_aux_fields,
       num_threads = num_threads,
-      conflict.array = dataset$conflict.array
+      conflict.array = dataset$conflict.array,
+      keep_temp_files = keep_temp_files
     )
+    GS.data <- clustering$GS.data
   } else if (analysis_type == "replot_1d") {
     log_info("Running Remaking plots...")
     ##############################
@@ -449,9 +455,13 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       polygon.data <- NA
     }
 
-    GS.data <- NULL
+    if (!exists("GS.data") || is.null(GS.data)) {
+      GS.data <- NULL
+    }
     if (generate_cluster_ordering || !keep_temp_files) {
-      load(file.path(outdir, paste(samplename, "_gsdata.RData", sep = "")))
+      if (is.null(GS.data)) {
+        load(file.path(outdir, paste(samplename, "_gsdata.RData", sep = "")))
+      }
     }
     write_tree <- analysis_type != "nd_dp" & analysis_type != "reassign_muts_1d" & analysis_type != "reassign_muts_nd"
     writeStandardFinalOutput(
@@ -471,7 +481,8 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       write_tree = write_tree,
       generate_cluster_ordering = generate_cluster_ordering,
       min_muts_cluster = min_muts_cluster,
-      min_frac_muts_cluster = min_frac_muts_cluster
+      min_frac_muts_cluster = min_frac_muts_cluster,
+      num_threads = num_threads
     )
   }
 
@@ -547,7 +558,7 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
 #' @param generate_cluster_ordering Boolean specifying whether a possible cluster ordering should be determined (Default: FALSE)
 #' @param no.samples.cluster.order Number of mutations to sample (with replacement) to classify pairs of clusters into parent-offspring or siblings (Default: 1000)
 #' @author sd11
-writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outfiles.prefix, outdir, samplename, subsamplenames, GS.data, density, polygon.data, no.iters, no.iters.burn.in, min_muts_cluster, min_frac_muts_cluster, assign_sampled_muts = TRUE, write_tree = FALSE, generate_cluster_ordering = FALSE, no.samples.cluster.order = 1000) {
+writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outfiles.prefix, outdir, samplename, subsamplenames, GS.data, density, polygon.data, no.iters, no.iters.burn.in, min_muts_cluster, min_frac_muts_cluster, assign_sampled_muts = TRUE, write_tree = FALSE, generate_cluster_ordering = FALSE, no.samples.cluster.order = 1000, num_threads = NA_integer_) {
   num_samples <- ncol(dataset$mutCount)
 
   if (num_samples > 1 & generate_cluster_ordering == TRUE) {
@@ -690,25 +701,28 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
 
     cluster_prob_colnames <- paste("prob.cluster", cluster_colnames, sep = ".")
     snv_index <- dataset$mutationType == "SNV"
-    snv_assignment_likelihoods <- data.frame(
-      dataset$chromosome[snv_index, 1],
+    dt_filtered <- as.data.table(filtered.assignment.likelihoods)
+    snv_assignment_likelihoods <- cbind(
+      as.data.table(dataset$chromosome[snv_index, 1]),
       dataset$position[snv_index, 1] - 1,
       dataset$position[snv_index, 1],
-      filtered.assignment.likelihoods[snv_index, , drop = FALSE],
+      dt_filtered[snv_index, ],
       clustering$best.node.assignments[snv_index]
     )
+    setDT(snv_assignment_likelihoods)
     colnames(snv_assignment_likelihoods) <- c("chr", "start", "end", cluster_prob_colnames, "most.likely.cluster")
     fwrite(snv_assignment_likelihoods, file = paste(outfiles.prefix, "_mutationClusterLikelihoods.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
 
     if (any(dataset$mutationType == "CNA")) {
       cna_index <- dataset$mutationType == "CNA"
-      cna.assignment.likelihoods <- data.frame(
-        dataset$chromosome[cna_index, 1],
+      cna.assignment.likelihoods <- cbind(
+        as.data.table(dataset$chromosome[cna_index, 1]),
         dataset$position[cna_index, 1] - 1,
         dataset$position[cna_index, 1],
-        filtered.assignment.likelihoods[cna_index, , drop = FALSE],
+        dt_filtered[cna_index, ],
         clustering$best.node.assignments[cna_index]
       )
+      setDT(cna.assignment.likelihoods)
       colnames(cna.assignment.likelihoods) <- c("chr", "start", "end", cluster_prob_colnames, "most.likely.cluster")
       fwrite(cna.assignment.likelihoods, file = paste(outfiles.prefix, "_mutationClusterLikelihoodsPseudoSNV.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
     }
@@ -739,35 +753,39 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
   if (!is.null(GS.data) && !.is_na_sentinel(GS.data)) {
     objects_to_save <- c(objects_to_save, "GS.data")
   }
-  save(list = objects_to_save, file = paste(outfiles.prefix, "_bestConsensusResults.RData", sep = ""))
+  .parallel_save(objects_to_save, paste(outfiles.prefix, "_bestConsensusResults.RData", sep = ""), num_threads = num_threads)
   write.table(data.frame(mut.index = dataset$removed_indices), file = paste(outfiles.prefix, "_removedMutationsIndex.txt", sep = ""), row.names = FALSE, quote = FALSE)
 
-  ########################################################################
-  # Save the consensus mutation assignments
-  ########################################################################
+  output <- as.data.table(output)
   colnames(output) <- c("chr", "start", "end", "cluster", "likelihood")
-  fwrite(output[dataset$mutationType == "SNV", ], file = paste(outfiles.prefix, "_bestConsensusAssignments.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
+
+  # Construct a mutation type vector that matches the expanded output length
+  num_orig_snvs <- length(dataset$chromosome.not.filtered)
+  num_pseudo_snvs <- sum(dataset$mutationType != "SNV")
+  full_mutation_type <- c(rep("SNV", num_orig_snvs), as.character(dataset$mutationType[dataset$mutationType != "SNV"]))
+  
+  fwrite(output[full_mutation_type == "SNV", ], file = paste(outfiles.prefix, "_bestConsensusAssignments.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
 
   ########################################################################
   # Save the CNA assignments separately
   ########################################################################
-  if (any(dataset$mutationType == "CNA")) {
-    fwrite(output[dataset$mutationType == "CNA", ], file = paste(outfiles.prefix, "_bestConsensusAssignmentsPseudoSNV.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
+  if (num_pseudo_snvs > 0) {
+    fwrite(output[full_mutation_type != "SNV", ], file = paste(outfiles.prefix, "_bestConsensusAssignmentsPseudoSNV.bed", sep = ""), sep = "\t", quote = FALSE, row.names = FALSE)
     # Assign the CNAs to clusters using their pseudoSNV representations
     cndata <- assign_cnas_to_clusters(dataset$cndata, output)
-    write.table(cndata, file = paste(outfiles.prefix, "_bestCNAassignments.txt", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
+    fwrite(cndata, file = paste(outfiles.prefix, "_bestCNAassignments.txt", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
 
     if (!is.null(cna.assignment.likelihoods)) {
-      cna_assignment_likelihoods <- get_cnas_cluster_probs(dataset$cndata, cna.assignment.likelihoods, c("chr", "start", "end", cluster_prob_colnames, "most.likely.cluster"))
-      write.table(cna_assignment_likelihoods, file = paste(outfiles.prefix, "_cnaClusterLikelihoods.bed", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
+      cna_assignment_likelihoods <- get_cnas_cluster_probs(as.data.table(dataset$cndata), as.data.table(cna.assignment.likelihoods), c("chr", "start", "end", cluster_prob_colnames, "most.likely.cluster"))
+      fwrite(cna_assignment_likelihoods, file = paste(outfiles.prefix, "_cnaClusterLikelihoods.bed", sep = ""), quote = FALSE, row.names = FALSE, sep = "\t")
     }
 
     # Create a new assignment table figure with the correct information
     # This removes pseudo SNVs as the assignmentTable will add an extra column for CNAs
     cluster_locations <- clustering$cluster.locations
     cluster_locations[, 3] <- rep(0, nrow(cluster_locations))
-    mut_assignments <- table(output[dataset$mutationType == "SNV", "cluster"])
-    for (i in 1:nrow(cluster_locations)) {
+    mut_assignments <- table(output[full_mutation_type == "SNV", cluster]) # cluster is a column name in data.table output
+    for (i in seq_len(nrow(cluster_locations))) {
       if (as.character(cluster_locations[i, 1]) %in% names(mut_assignments)) {
         cluster_locations[i, 3] <- mut_assignments[as.character(cluster_locations[i, 1])]
       }
@@ -791,26 +809,39 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
 #' @return The snv_assignment_table with the removed mutations added into the position they were originally
 #' @author sd11
 add_removed_snvs <- function(dataset, snv_assignment_table) {
-  if (length(dataset$removed_indices) > 0) {
-    removed_indices <- sort(unique(dataset$removed_indices))
-    removed_indices <- removed_indices[removed_indices >= 1 & removed_indices <= length(dataset$chromosome.not.filtered)]
-    if (length(removed_indices) > 0) {
-      removed_rows <- cbind(
-        dataset$chromosome.not.filtered[removed_indices],
-        dataset$mut.position.not.filtered[removed_indices] - 1,
-        dataset$mut.position.not.filtered[removed_indices],
-        NA,
-        NA
-      )
-      snv_assignment_table <- rbind(snv_assignment_table, removed_rows)
-    }
+  num_original_snvs <- length(dataset$chromosome.not.filtered)
+  num_removed_snvs <- length(dataset$removed_indices)
+  
+  # Identify SNVs vs Pseudo-SNVs in the current table using logical indexing
+  is_snv <- dataset$mutationType == "SNV"
+  
+  snvs_in_table <- snv_assignment_table[is_snv, , drop = FALSE]
+  pseudos_in_table <- snv_assignment_table[!is_snv, , drop = FALSE]
+  
+  # Pre-allocate full SNV set
+  full_snvs <- as.data.frame(matrix(NA, nrow = num_original_snvs, ncol = ncol(snv_assignment_table)))
+  
+  removed_idx <- dataset$removed_indices
+  non_removed_idx <- setdiff(seq_len(num_original_snvs), removed_idx)
+  
+  # Fill non-removed SNVs
+  full_snvs[non_removed_idx, ] <- snvs_in_table
+  
+  # Fill removed SNVs basic info
+  if (num_removed_snvs > 0) {
+    full_snvs[removed_idx, 1] <- dataset$chromosome.not.filtered[removed_idx]
+    full_snvs[removed_idx, 2] <- dataset$mut.position.not.filtered[removed_idx] - 1
+    full_snvs[removed_idx, 3] <- dataset$mut.position.not.filtered[removed_idx]
   }
-
-  # Sort the output in the same order as the dataset
-  chrpos_input <- paste(dataset$chromosome, dataset$position, sep = "_")
-  chrpos_output <- paste(snv_assignment_table[, 1], snv_assignment_table[, 3], sep = "_")
-  snv_assignment_table <- snv_assignment_table[match(chrpos_input, chrpos_output), , drop = FALSE]
-  return(snv_assignment_table)
+  
+  # Re-append pseudo-SNVs
+  if (nrow(pseudos_in_table) > 0) {
+    output <- rbind(full_snvs, pseudos_in_table)
+  } else {
+    output <- full_snvs
+  }
+  
+  return(output)
 }
 
 
@@ -820,18 +851,17 @@ add_removed_snvs <- function(dataset, snv_assignment_table) {
 #' @return The cndata object with extra column cluster_assignment
 #' @author sd11
 assign_cnas_to_clusters <- function(cndata, snv_assignment_table) {
-  cndata$cluster_assignment <- "NA"
-  for (i in 1:nrow(cndata)) {
-    # Fetch all pseudoSNVs that represent this CNA
-    selection <- snv_assignment_table[, 1] == as.character(cndata$chr[i]) & snv_assignment_table[, 3] == as.character(cndata$startpos[i])
-    if (any(selection)) {
-      # Work out which cluster has the most pseudoSNVs assigned. That will be the cluster to which the CNA event is assigned
-      pseudo_snvs <- snv_assignment_table[selection, , drop = FALSE]
-      assign_inventory <- table(pseudo_snvs[, 4])
-      cndata$cluster_assignment[i] <- names(assign_inventory)[which.max(assign_inventory)]
-    }
-  }
-  return(cndata)
+  dt_cna <- as.data.table(cndata)
+  dt_snv <- as.data.table(snv_assignment_table)
+  colnames(dt_snv) <- c("chr", "start", "end", "cluster", "likelihood")
+  
+  # Vote for majority cluster by chr and mutation position (snv end)
+  # In pseudo-SNV conversion (load_data/__init_pseudo_snvs), the SNV end position matches cndata startpos
+  res_dt <- dt_snv[, .(cluster_assignment = names(which.max(table(cluster)))), by = .(chr, end)]
+  dt_cna <- merge(dt_cna, res_dt, by.x = c("chr", "startpos"), by.y = c("chr", "end"), all.x = TRUE)
+  dt_cna[is.na(cluster_assignment), cluster_assignment := "NA"]
+  
+  return(as.data.frame(dt_cna))
 }
 
 #' Use the Pseudo-SNV probabilities to obtain a probability of each CNA of each cluster
@@ -841,37 +871,28 @@ assign_cnas_to_clusters <- function(cndata, snv_assignment_table) {
 #' @return A data.frame with chr,start,end,probs_per_cluster
 #' @author sd11
 get_cnas_cluster_probs <- function(cndata, snv_assignment_likelihoods, cluster_colnames) {
-  cna_cluster_probs <- matrix(NA, nrow = nrow(cndata), ncol = ncol(snv_assignment_likelihoods) - 4)
-  for (i in 1:nrow(cndata)) {
-    # Fetch all pseudoSNVs that represent this CNA
-    selection <- snv_assignment_likelihoods[, 1] == as.character(cndata$chr[i]) & snv_assignment_likelihoods[, 3] == as.character(cndata$startpos[i])
-    if (any(selection)) {
-      # Work out which cluster has the most pseudoSNVs assigned. That will be the cluster to which the CNA event is assigned
-      pseudo_snvs <- snv_assignment_likelihoods[selection, , drop = FALSE]
-
-      cna_cluster_probs[i, ] <- sapply(which(grepl("prob", cluster_colnames)), function(j) {
-        if (any(pseudo_snvs[, j] == 0)) {
-          0
-        } else {
-          # Combine p-values using fishers' method
-          pchisq(-2 * sum(log(pseudo_snvs[, j])), df = length(pseudo_snvs[, j]), lower.tail = FALSE)
-        }
-      })
-    }
+  dt_cna <- as.data.table(cndata)
+  dt_snv <- as.data.table(snv_assignment_likelihoods)
+  
+  prob_cols <- setdiff(colnames(dt_snv), c("chr", "start", "end", "most.likely.cluster"))
+  
+  # Group pseudo-SNVs by their representative CNA (chr/startpos) and average probabilities
+  # In pseudo-SNV conversion, the end position of the pseudo-SNV matches the startpos of the CNA segment.
+  res_dt <- dt_snv[, lapply(.SD, mean), by = .(chr, end), .SDcols = prob_cols]
+  dt_cna <- merge(dt_cna, res_dt, by.x = c("chr", "startpos"), by.y = c("chr", "end"), all.x = TRUE)
+  
+  # Identify most likely cluster from averaged percentages
+  # (Since result might have many columns, using which.max across the probability columns)
+  if (nrow(dt_cna) > 0) {
+    # Extract just the prob columns to find max
+    prob_subset <- as.matrix(dt_cna[, ..prob_cols])
+    dt_cna$most.likely.cluster <- apply(prob_subset, 1, function(x) {
+        if (all(is.na(x))) return(NA)
+        return(which.max(x))
+    })
   }
-  # Obtain most likely cluster
-  # First get those CNAs for which we don't have any probabilities and set them to NA
-  assignments <- apply(cna_cluster_probs, 1, function(x) {
-    all(is.na(x))
-  })
-  assignments[assignments] <- NA
-  # Then assign those for which we have probabilities to the cluster with the highest probability
-  assignments[!is.na(assignments)] <- unlist(apply(cna_cluster_probs, 1, which.max))
 
-  output <- data.frame(cndata[, c("chr", "startpos", "endpos", "CNA")], cna_cluster_probs, assignments)
-  colnames(output) <- c("chr", "startpos", "endpos", "CNA", cluster_colnames[grepl("prob", cluster_colnames)], "most.likely.cluster")
-
-  return(output)
+  return(dt_cna)
 }
 
 #' Helper function that flattens a 3D array into a 2D one
@@ -915,7 +936,7 @@ flatten_3d_to_2d <- function(data, col_names) {
 #' @param mutationTypes Vector with mutation types, used for plotting
 #' @param max.considered.clusters Maximum number of clusters to consider
 #' @author sd11
-DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_, conflict.array = .init_conflicts()) {
+DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_, conflict.array = .init_conflicts(), keep_temp_files = TRUE) {
   output_folder <- normalizePath(output_folder, mustWork = FALSE)
   if (!dir.exists(output_folder)) {
     dir.create(output_folder, recursive = TRUE, showWarnings = FALSE)
@@ -947,7 +968,9 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
     conflict.array = conflict.array
   )
 
-  save(file = file.path(output_folder, paste(samplename, "_gsdata.RData", sep = "")), GS.data)
+  if (keep_temp_files) {
+    .parallel_save("GS.data", file.path(output_folder, paste(samplename, "_gsdata.RData", sep = "")), num_threads = num_threads)
+  }
 
   # nD dataset, plot sample versus sample
   if (ncol(mutCount) > 1) {
@@ -999,6 +1022,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       warning(paste("Unknown mutation assignment type", mut.assignment.type, sep = " "))
       stop(paste("Unknown mutation assignment type", mut.assignment.type, sep = " "))
     }
+    consClustering$GS.data <- GS.data
     return(consClustering)
 
     # 1D dataset, plot just the single density
@@ -1084,6 +1108,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       mutationTypes = mutationTypes
     )
 
+    consClustering$GS.data <- GS.data
     return(consClustering)
   }
 }

@@ -89,31 +89,15 @@ load.data.inner <- function(list_of_tables, cellularity, Chromosome, position, W
   }
 
   # Remove those mutations that have missing values
-  not.there.wt <- apply(WTCount, 1, function(x) {
-    sum(is.na(x)) > 0
-  })
-  not.there.mut <- apply(mutCount, 1, function(x) {
-    sum(is.na(x)) > 0
-  })
-  not.there.cn <- apply(totalCopyNumber, 1, function(x) {
-    sum(is.na(x)) > 0
-  })
-  not.there.cna <- apply(copyNumberAdjustment, 1, function(x) {
-    sum(is.na(x)) > 0
-  })
-  not.there.kappa <- apply(kappa, 1, function(x) {
-    sum(is.na(x)) > 0
-  })
+  not.there.wt <- rowSums(is.na(WTCount)) > 0
+  not.there.mut <- rowSums(is.na(mutCount)) > 0
+  not.there.cn <- rowSums(is.na(totalCopyNumber)) > 0
+  not.there.cna <- rowSums(is.na(copyNumberAdjustment)) > 0
+  not.there.kappa <- rowSums(is.na(kappa)) > 0
   # Remove those mutations that have no coverage. These cause for trouble lateron.
-  not.coverage <- apply(WTCount + mutCount, 1, function(x) {
-    any(x == 0 | is.na(x))
-  })
-  not.cna <- apply(copyNumberAdjustment, 1, function(x) {
-    any(x == 0 | is.na(x))
-  })
-  not.on.supported.chrom <- apply(chromosome, 1, function(x) {
-    !any(x %in% as.character(supported_chroms))
-  })
+  not.coverage <- rowSums(WTCount + mutCount == 0 | is.na(WTCount + mutCount)) > 0
+  not.cna <- rowSums(copyNumberAdjustment == 0 | is.na(copyNumberAdjustment)) > 0
+  not.on.supported.chrom <- rowSums(matrix(chromosome %in% as.character(supported_chroms), nrow = nrow(chromosome))) == 0
 
   log_info(paste("Removed", sum(not.there.wt), "with missing WTCount", sep = " "))
   log_info(paste("Removed", sum(not.there.mut), "with missing mutCount", sep = " "))

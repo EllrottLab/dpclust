@@ -121,11 +121,18 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
     warning("No local optima found when assigning mutations to clusters")
     most.likely.cluster <- rep(1, no.muts)
     most.likely.cluster.likelihood <- rep(1, no.muts)
-    best.assignment.likelihoods <- rep(1, no.muts)
-    cluster_locations <- NA
+    cluster_locations <- matrix(c(1, mean(subclonal.fraction, na.rm=TRUE), no.muts), nrow=1)
+    colnames(cluster_locations) <- c("cluster.no", "location", "no.of.mutations")
+    # Initialize an empty/single preference matrix so return doesn't crash
+    mutation.preferences <- matrix(1, nrow = no.muts, ncol = 1)
   }
 
-  return(list(best.node.assignments = most.likely.cluster, best.assignment.likelihoods = most.likely.cluster.likelihood, cluster.locations = cluster_locations, all.assignment.likelihoods = mutation.preferences))
+  return(list(
+    best.node.assignments = most.likely.cluster,
+    best.assignment.likelihoods = most.likely.cluster.likelihood,
+    cluster.locations = cluster_locations,
+    all.assignment.likelihoods = mutation.preferences
+  ))
 }
 
 #' Assign mutations for multi-dimensional clustering by adding clusters until the likelihood no longer improves

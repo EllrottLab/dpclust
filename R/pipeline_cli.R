@@ -215,6 +215,14 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                  cna_conflicting_events_only = FALSE) {
   options(bitmapType = "cairo")
   options(rgl.useNULL = TRUE)
+  
+  # Configure data.table threading
+  if (is.na(num_threads)) {
+    num_threads_dt <- .get_available_cores()
+  } else {
+    num_threads_dt <- num_threads
+  }
+  data.table::setDTthreads(num_threads_dt)
 
   # Resolve all user-supplied paths to absolute paths immediately.
   # This is essential for container environments (e.g. Singularity with --pwd)
@@ -295,7 +303,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     num_threads = num_threads,
     memory_limit_gb = memory_limit_gb,
     sample.snvs.only = sample_snvs_only,
-    remove.snvs = FALSE
+    remove.snvs = FALSE,
+    prefix = prefix
   )
 
   datpath <- if (is.null(data_path)) "" else data_path
@@ -324,11 +333,6 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     seed, assign_sampled_muts, keep_temp_files,
     min_muts_cluster, min_frac_muts_cluster
   )
-
-  # Prefix renaming logic
-  if (!is.null(prefix)) {
-    .rename_output_with_prefix(samplename, outputdir, iterations, prefix)
-  }
 
   log_info("DPClust pipeline completed.")
 }
@@ -392,7 +396,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                       iterations, burnin, mut_assignment_type, num_muts_sample,
                                       seed, assign_sampled_muts, keep_temp_files,
                                       min_muts_cluster, min_frac_muts_cluster) {
-  param_file <- file.path(outdir, paste0(samplename, "__", if (is.null(prefix)) "" else paste0(prefix, "__"), "dpclust_run_parameters.tsv"))
+  prefix_delim <- if (!is.null(prefix) && nchar(prefix) > 0) paste0("_", prefix, "_") else "_"
+  param_file <- file.path(outdir, paste0(samplename, prefix_delim, "dpclust_run_parameters.tsv"))
 
   info_files <- Sys.glob(file.path(outdir, "*__allDirichletProcessInfo.txt"))
   input_loci_count <- if (length(info_files) == 1) length(readLines(info_files[1], warn = FALSE)) - 1 else NA
