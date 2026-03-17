@@ -82,6 +82,16 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
         active_threads = omp_get_max_threads();
     }
 #endif
+
+    // Per-thread Mersenne Twister RNGs — seeded from R's RNG so results are
+    // reproducible given the same R seed, while allowing fully parallel uniform draws.
+    std::vector<std::mt19937> thread_rngs(static_cast<size_t>(active_threads));
+    {
+        // Draw one seed per thread from R's RNG (this part is serial and fast)
+        for (int t = 0; t < active_threads; ++t) {
+            thread_rngs[t].seed(static_cast<uint32_t>(R::runif(0, 4294967295.0)));
+        }
+    }
     
     double A = 1.0;
     double B = conc_param;
@@ -174,8 +184,9 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
         upper[t] += diff / 10.0;
         
         // Randomise starting positions (iteration 0 - which is 1 in R)
+        std::uniform_real_distribution<double> start_dist(lower[t], upper[t]);
         for (int c = 0; c < C; ++c) {
-            double val = R::runif(lower[t], upper[t]);
+            double val = start_dist(thread_rngs[0]);
             // pi.h[1, c, t] -> m=0
             pi_h[0 + iter * c + iter * C * t] = val;
         }
@@ -200,25 +211,12 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
     std::vector<double> Pr_S_threads(static_cast<size_t>(active_threads) * C);
     std::vector<double> sampled_uniforms(num_muts, 0.0);
 
-    // Build stick-breaking priors once per iteration and reuse for each mutation.
-    std::vector<double> log_prior(C, 0.0);
-
     // Pre-allocate thread-local buffers for shape/rate updates
     int ct = C * num_timepoints;
     std::vector<double> shape_sums_thread(static_cast<size_t>(active_threads) * ct, 0.0);
     std::vector<double> rate_sums_thread(static_cast<size_t>(active_threads) * ct, 0.0);
     std::vector<double> shape_sums(ct, 0.0);
     std::vector<double> rate_sums(ct, 0.0);
-
-    // Per-thread Mersenne Twister RNGs — seeded from R's RNG so results are
-    // reproducible given the same R seed, while allowing fully parallel uniform draws.
-    std::vector<std::mt19937> thread_rngs(static_cast<size_t>(active_threads));
-    {
-        // Draw one seed per thread from R's RNG (this part is serial and fast)
-        for (int t = 0; t < active_threads; ++t) {
-            thread_rngs[t].seed(static_cast<uint32_t>(R::runif(0, 4294967295.0)));
-        }
-    }
 
     // MCMC Loop
     for (int m = 1; m < iter; ++m) {
@@ -240,95 +238,122 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
             log_prior[j] = std::log(V_h(m - 1, j)) + sum_log_1_minus_V;
         }
 
-        std::vector<double> sampled_uniforms(num_muts, 0.0);
-        // REMOVED: serial R::runif loop — now drawn inside the parallel region
+        // Contiguous CCF scratchpad for the current iteration to maximize cache locality
+        std::vector<double> current_ccfs(C * num_timepoints);
+        for (int c = 0; c < C; ++c) {
+            for (int t = 0; t < num_timepoints; ++t) {
+                current_ccfs[c + C * t] = pi_h[(m - 1) + iter * c + iter * C * t];
+            }
+        }
 
 #ifdef _OPENMP
 #pragma omp parallel
         {
             int tid = omp_get_thread_num();
-            double* Pr_S = &Pr_S_threads[static_cast<size_t>(tid) * C];
-            std::mt19937& rng = thread_rngs[static_cast<size_t>(tid)];
+            double* Pr_S = &Pr_S_threads[tid * C];
+            std::mt19937& rng = thread_rngs[tid];
             std::uniform_real_distribution<double> udist(0.0, 1.0);
-            // Sample uniforms in parallel — each thread handles its own chunk
+
 #pragma omp for schedule(static)
             for (int k = 0; k < num_muts; ++k) {
                 sampled_uniforms[k] = udist(rng);
             }
+
 #pragma omp for schedule(static)
+            for (int k = 0; k < num_muts; ++k) {
+                for (int c = 0; c < C; ++c) Pr_S[c] = log_prior[c];
+                
+                for (int t = 0; t < num_timepoints; ++t) {
+                    double mk_t = mutCount(k, t);
+                    double wk_t = WTCount(k, t);
+                    double mb_unit = copyNumberAdjustment(k, t) * burden_denom_inv(k, t);
+                    const double* ccfs_t = &current_ccfs[C * t];
+                    
+                    for (int c = 0; c < C; ++c) {
+                        double mb = ccfs_t[c] * mb_unit;
+                        if (mb < 0.000001) mb = 0.000001;
+                        if (mb > 0.999999) mb = 0.999999;
+                        Pr_S[c] += mk_t * std::log(mb) + wk_t * std::log(1.0 - mb);
+                    }
+                }
+                
+                if (!conflicts_adj[k].empty()) {
+                    for (auto& edge : conflicts_adj[k]) {
+                        int neighbor_cluster = S_curr[edge.first] - 1;
+                        if (neighbor_cluster >= 0 && neighbor_cluster < C) Pr_S[neighbor_cluster] -= edge.second;
+                    }
+                }
+                
+                double max_val = Pr_S[0];
+                for(int c=1; c<C; ++c) if(Pr_S[c] > max_val) max_val = Pr_S[c];
+                double sum_exp = 0.0;
+                for(int c=0; c<C; ++c) {
+                    Pr_S[c] -= max_val;
+                    if (R_IsNaN(Pr_S[c])) Pr_S[c] = -700;
+                    double ex = std::exp(Pr_S[c]);
+                    Pr_S[c] = ex;
+                    sum_exp += ex;
+                }
+                
+                if (sum_exp <= 0.0 || !std::isfinite(sum_exp)) {
+                    sum_exp = (double)C;
+                    for (int c = 0; c < C; ++c) Pr_S[c] = 1.0;
+                }
+                
+                double r = sampled_uniforms[k] * sum_exp;
+                double cum_sum = 0.0;
+                int picked = C - 1;
+                for(int c = 0; c < C; ++c) {
+                    cum_sum += Pr_S[c];
+                    if (r <= cum_sum) { picked = c; break; }
+                }
+                S_curr[k] = picked + 1;
+            }
+        }
 #else
         std::vector<double> Pr_S_vec(C);
         double* Pr_S = Pr_S_vec.data();
-        std::uniform_real_distribution<double> udist(0.0, 1.0);
         for (int k = 0; k < num_muts; ++k) {
-            sampled_uniforms[k] = udist(thread_rngs[0]);
-        }
-#endif
-        for (int k = 0; k < num_muts; ++k) {
-            for (int c = 0; c < C; ++c) {
-                Pr_S[c] = log_prior[c];
-            }
+            sampled_uniforms[k] = R::runif(0.0, 1.0);
+            for (int c = 0; c < C; ++c) Pr_S[c] = log_prior[c];
             
-            // Add Likelihood
             for (int t = 0; t < num_timepoints; ++t) {
+                double mk_t = mutCount(k, t);
+                double wk_t = WTCount(k, t);
+                double mb_unit = copyNumberAdjustment(k, t) * burden_denom_inv(k, t);
+                const double* ccfs_t = &current_ccfs[C * t];
+                
                 for (int c = 0; c < C; ++c) {
-                    double val = pi_h[(m - 1) + iter * c + iter * C * t];
-                    double mb = val * copyNumberAdjustment(k, t) * burden_denom_inv(k, t);
-                    if (R_IsNaN(mb) || mb < 0.000001) mb = 0.000001;
+                    double mb = ccfs_t[c] * mb_unit;
+                    if (mb < 0.000001) mb = 0.000001;
                     if (mb > 0.999999) mb = 0.999999;
-                    Pr_S[c] += mutCount(k, t) * std::log(mb) + WTCount(k, t) * std::log(1.0 - mb);
+                    Pr_S[c] += mk_t * std::log(mb) + wk_t * std::log(1.0 - mb);
                 }
             }
-            
-            // Add Pairwise Conflict Penalties
-            // If neighbor j of k is in cluster c, subtract log(weight) from log_prob[c]
+            // Conflicts...
             if (!conflicts_adj[k].empty()) {
                 for (auto& edge : conflicts_adj[k]) {
-                    int neighbor = edge.first;
-                    double penalty = edge.second;
-                    int neighbor_cluster = S_curr[neighbor] - 1;
-                    if (neighbor_cluster >= 0 && neighbor_cluster < C) {
-                        Pr_S[neighbor_cluster] -= penalty;
-                    }
+                    int neighbor_cluster = S_curr[edge.first] - 1;
+                    if (neighbor_cluster >= 0 && neighbor_cluster < C) Pr_S[neighbor_cluster] -= edge.second;
                 }
             }
-            
-            // Normalize in log space then exp
+            // Sample...
             double max_val = Pr_S[0];
             for(int c=1; c<C; ++c) if(Pr_S[c] > max_val) max_val = Pr_S[c];
-            
             double sum_exp = 0.0;
             for(int c=0; c<C; ++c) {
-                Pr_S[c] -= max_val;
-                if (R_IsNaN(Pr_S[c])) Pr_S[c] = -700; // Small log prob
-                double ex = std::exp(Pr_S[c]);
-                Pr_S[c] = ex;
-                sum_exp += ex;
+                Pr_S[c] = std::exp(Pr_S[c] - max_val);
+                sum_exp += Pr_S[c];
             }
-            
-            if (sum_exp <= 0.0 || !std::isfinite(sum_exp)) {
-                sum_exp = static_cast<double>(C);
-                for (int c = 0; c < C; ++c) {
-                    Pr_S[c] = 1.0;
-                }
-            }
-            for(int c=0; c<C; ++c) Pr_S[c] /= sum_exp;
-            
-            // Multinomial sampling
-            double r = sampled_uniforms[k];
+            double r = sampled_uniforms[k] * sum_exp;
             double cum_sum = 0.0;
             int picked = C - 1;
             for(int c = 0; c < C; ++c) {
                 cum_sum += Pr_S[c];
-                if (r <= cum_sum) {
-                    picked = c;
-                    break;
-                }
+                if (r <= cum_sum) { picked = c; break; }
             }
-            S_curr[k] = picked + 1; // 1-based
+            S_curr[k] = picked + 1;
         }
-#ifdef _OPENMP
-        } // end parallel
 #endif
         
         std::vector<int> cluster_counts(C, 0);
@@ -338,16 +363,13 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
                 cluster_counts[c_idx]++;
             }
         }
-
-        // Update stick-breaking weights
         int cumulative_count = 0;
         for (int c = 0; c < C - 1; ++c) {
             double count_eq = static_cast<double>(cluster_counts[c]);
             cumulative_count += cluster_counts[c];
             double count_gt = static_cast<double>(num_muts - cumulative_count);
-            
             V_h(m, c) = R::rbeta(1.0 + count_eq, alpha[m-1] + count_gt);
-            if(V_h(m, c) == 1.0) V_h(m, c) = 0.999;
+            if(V_h(m, c) >= 1.0) V_h(m, c) = 0.999;
         }
         V_h(m, C - 1) = 1.0;
         
