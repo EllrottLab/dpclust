@@ -39,6 +39,10 @@ dpclust_cli <- function() {
     optparse::make_option(c("--min_frac_muts_cluster"), type = "numeric", default = 0.01, help = "Min fraction mutations per cluster [default: %default]", metavar = "numeric"),
     optparse::make_option(c("--bin_size"), type = "double", default = NULL, help = "Binsize for multi-dimensional density", metavar = "double"),
     optparse::make_option(c("--seed"), type = "integer", default = 123, help = "Random seed [default: %default]", metavar = "integer"),
+    optparse::make_option(c("--density_smooth"), type = "numeric", default = NA_real_, help = "Optional smoothing override (default: algorithm-specific; 0.1 for 1D, 0.01 for nD assignment)", metavar = "numeric"),
+    optparse::make_option(c("--hypercube_size"), type = "integer", default = 5, help = "Window size for peak detection [default: %default]", metavar = "integer"),
+    optparse::make_option(c("--cluster_conc"), type = "numeric", default = 5, help = "Concentration parameter for cluster variance [default: %default]", metavar = "numeric"),
+    optparse::make_option(c("--conc_param"), type = "numeric", default = 0.01, help = "Dirichlet process concentration parameter (alpha) [default: %default]", metavar = "numeric"),
 
     # Advanced / Behavior
     optparse::make_option(c("--species"), type = "character", default = "human", help = "Species (e.g. human, mouse) [default: %default]", metavar = "string"),
@@ -188,7 +192,11 @@ dpclust_cli <- function() {
       memory_limit_gb = opt$memory_limit_gb,
       co_cluster_cna = opt$co_cluster_cna,
       add_conflicts = opt$add_conflicts,
-      cna_conflicting_events_only = opt$cna_conflicting_events_only
+      cna_conflicting_events_only = opt$cna_conflicting_events_only,
+      density_smooth = opt$density_smooth,
+      hypercube_size = opt$hypercube_size,
+      cluster_conc = opt$cluster_conc,
+      conc_param = opt$conc_param
     ),
     error = function(e) {
       run_status <<- "FAILED"
@@ -212,9 +220,24 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                  memory_limit_gb = NA,
                                  co_cluster_cna = FALSE,
                                  add_conflicts = FALSE,
-                                 cna_conflicting_events_only = FALSE) {
+                                 cna_conflicting_events_only = FALSE,
+                                 density_smooth = NA_real_,
+                                 hypercube_size = 5,
+                                 cluster_conc = 5,
+                                 conc_param = 0.01) {
   options(bitmapType = "cairo")
   options(rgl.useNULL = TRUE)
+
+  # Surface common parameter combinations that often collapse clustering to a single cluster.
+  if (!is.na(conc_param) && conc_param >= 1) {
+    warning(sprintf("conc_param=%.3g is very high for DPClust and often collapses to one dominant cluster. Typical value is 0.01.", conc_param))
+  }
+  if (!is.na(cluster_conc) && cluster_conc >= 15) {
+    warning(sprintf("cluster_conc=%.3g is aggressive and can suppress minor clusters. Typical value is 5.", cluster_conc))
+  }
+  if (!is.na(num_muts_sample) && num_muts_sample > 0 && num_muts_sample < 10000) {
+    warning(sprintf("num_muts_sample=%d is low and may hide minor peaks in high-mutation samples. Typical value is 50000.", as.integer(num_muts_sample)))
+  }
   
   # Configure data.table threading
   if (is.na(num_threads)) {
@@ -304,12 +327,16 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     memory_limit_gb = memory_limit_gb,
     sample.snvs.only = sample_snvs_only,
     remove.snvs = FALSE,
-    prefix = prefix
+    prefix = prefix,
+    density_smooth = density_smooth,
+    hypercube_size = hypercube_size,
+    cluster_conc = cluster_conc,
+    conc_param = conc_param
   )
 
   datpath <- if (is.null(data_path)) "" else data_path
   sample_params <- make_sample_params(datafiles, cellularity, is_male, samplename, subsamples, mutphasingfiles, datpath = datpath, cndatafiles = cndatafiles)
-  advanced_params <- make_advanced_params(seed)
+  advanced_params <- make_advanced_params(seed, conc_param = conc_param)
   cna_params <- list(
     co_cluster_cna = co_cluster_cna,
     add.conflicts = add_conflicts,
@@ -331,7 +358,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     samplename, prefix, outputdir, run_sample, analysis_type,
     iterations, burnin, mut_assignment_type, num_muts_sample,
     seed, assign_sampled_muts, keep_temp_files,
-    min_muts_cluster, min_frac_muts_cluster
+    min_muts_cluster, min_frac_muts_cluster,
+    density_smooth, hypercube_size, cluster_conc, conc_param
   )
 
   log_info("DPClust pipeline completed.")
@@ -395,7 +423,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
 .save_pipeline_parameters <- function(samplename, prefix, outdir, run_sample, analysis_type,
                                       iterations, burnin, mut_assignment_type, num_muts_sample,
                                       seed, assign_sampled_muts, keep_temp_files,
-                                      min_muts_cluster, min_frac_muts_cluster) {
+                                      min_muts_cluster, min_frac_muts_cluster,
+                                      density_smooth, hypercube_size, cluster_conc, conc_param) {
   prefix_delim <- if (!is.null(prefix) && nchar(prefix) > 0) paste0("_", prefix, "_") else "_"
   param_file <- file.path(outdir, paste0(samplename, prefix_delim, "dpclust_run_parameters.tsv"))
 
@@ -407,14 +436,16 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
       "timestamp", "dpclust_version", "samplename", "run_sample", "analysis_type",
       "iterations", "burnin", "mut_assignment_type", "num_muts_sample", "seed",
       "assign_sampled_muts", "keep_temp_files", "min_muts_cluster",
-      "min_frac_muts_cluster", "prefix", "input_loci_count"
+      "min_frac_muts_cluster", "prefix", "input_loci_count",
+      "density_smooth", "hypercube_size", "cluster_conc", "conc_param"
     ),
     value = c(
       as.character(Sys.time()), as.character(packageVersion("DPClust")), samplename,
       run_sample, analysis_type, iterations, burnin, mut_assignment_type,
       num_muts_sample, seed, assign_sampled_muts, keep_temp_files,
       min_muts_cluster, min_frac_muts_cluster, if (is.null(prefix)) "NA" else prefix,
-      input_loci_count
+      input_loci_count,
+      density_smooth, hypercube_size, cluster_conc, conc_param
     ),
     stringsAsFactors = FALSE
   )
@@ -428,7 +459,9 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
       "\n", strrep("=", 30), "\nBest cluster information\n", strrep("=", 30), "\n",
       paste(utils::capture.output(print(bestClusterInfo)), collapse = "\n")
     ))
-    write.table(bestClusterInfo, file = param_file, append = TRUE, sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+    cluster_summary_file <- file.path(outdir, paste0(samplename, prefix_delim, "dpclust_cluster_summary.tsv"))
+    write.table(bestClusterInfo, file = cluster_summary_file, sep = "\t", quote = FALSE, row.names = FALSE)
+    log_info(paste("Wrote cluster summary to:", cluster_summary_file))
   }
 }
 

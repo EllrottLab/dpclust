@@ -25,7 +25,7 @@ resolve_sampled_iters <- function(sampledIters, GS.data) {
 #' @param no.iters.burn.in Number of iterations to discard as burn in
 #' @return Standardised mutation clustering output, including clusters, mutation assignments and likelihoods
 #' @author dw9, sd11
-oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in, outdir = ".", num_threads = -1) {
+oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, density, no.iters, no.iters.burn.in, outdir = ".", num_threads = -1, hypercube.size = 5) {
   no.muts <- length(subclonal.fraction)
   normal.copy.number <- rep(2, no.muts)
   post.burn.in.start <- no.iters.burn.in
@@ -35,7 +35,7 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
   pi.h <- GS.data$pi.h[, , 1]
 
   # Obtain local optima and peak indices
-  res <- getLocalOptima(density, hypercube.size = 5)
+  res <- getLocalOptima(density, hypercube.size = hypercube.size)
   localOptima <- res$localOptima
   peak.indices <- res$peak.indices
   write.table(localOptima, file.path(outdir, paste0(samplename, "_localOptima.txt")), quote = FALSE, sep = "\t")
@@ -86,7 +86,7 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
     most.likely.cluster <- max.col(mutation.preferences)
     out <- cbind(mutation.preferences, most.likely.cluster)
     colnames(out)[(ncol(out) - no.optima):ncol(out)] <- c(paste("prob.cluster", 1:ncol(mutation.preferences), sep = ""), "most.likely.cluster")
-    fwrite(as.data.frame(out), file.path(outdir, paste0(samplename, "_DP_and_cluster_info.txt")), sep = "\t", row.names = FALSE, quote = FALSE)
+    fwrite(as.data.frame(out), file.path(outdir, paste0(samplename, "_DP_and_cluster_info.txt")), sep = "\t", row.names = FALSE, quote = FALSE, na = "NA")
 
     # Assemble a table with mutation assignments to each cluster
     cluster_assignment_counts <- sapply(1:ncol(mutation.preferences), function(x, m) {
@@ -643,7 +643,7 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
       quote = FALSE
     )
 
-    write.table(out, paste(new_output_folder, "/", samplename, "_DP_and_cluster_info_", density.smooth, ".txt", sep = ""), sep = "\t", row.names = FALSE, quote = FALSE)
+    write.table(out, paste(new_output_folder, "/", samplename, "_DP_and_cluster_info_", density.smooth, ".txt", sep = ""), sep = "\t", row.names = FALSE, quote = FALSE, na = "NA")
     write.table(CIs, paste(new_output_folder, "/", samplename, "_confInts_", density.smooth, ".txt", sep = ""), col.names = paste(rep(paste(samplename, subsamples, sep = ""), each = 2), rep(c(".lower.CI", ".upper.CI"), no.subsamples), sep = ""), row.names = FALSE, sep = "\t", quote = FALSE)
   } else {
     most.likely.cluster <- rep(1, no.muts)

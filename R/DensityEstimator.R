@@ -81,8 +81,9 @@ Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.
     finite_mcn <- mutationCopyNumber[is.finite(mutationCopyNumber)]
     if (length(finite_mcn) > 0) {
       x.max <- ceiling(max(finite_mcn, na.rm = TRUE) * 12) / 10
+      x.max <- max(1.5, min(3, x.max))
     } else {
-      x.max <- 2 # Standard fallback
+      x.max <- 1.5 # Standard fallback
     }
   }
 

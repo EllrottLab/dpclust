@@ -44,6 +44,15 @@ plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y
   xx = density[,1]
   yy = density[,2]
 
+  if (is.na(x.max)) {
+    finite_mcn <- mutationCopyNumber[is.finite(mutationCopyNumber)]
+    if (length(finite_mcn) > 0) {
+      x.max <- ceiling(max(finite_mcn, na.rm = TRUE) * 12) / 10
+      x.max <- max(1.5, min(3, x.max))
+    } else {
+      x.max <- 1.5
+    }
+  }
   if(is.na(y.max)) { y.max=ceiling(max(polygon.data)) } #/10)*10
   
   # Plot the histogram, the density line and add the plot title
@@ -53,9 +62,9 @@ plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y
     finite_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max)
     hist(mutationCopyNumber[finite_indices], breaks = seq(-0.1, x.max, 0.025), col = "lightgrey", freq = FALSE, xlab = xlabel, main = "", ylim = c(0, y.max), cex.axis = 2, cex.lab = 2)
   } else {
-    # Plot SNVs and CNAs with different colours
-    snv_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max) & (mutationTypes == "SNV")
-    cna_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max) & (mutationTypes == "CNA")
+    # Plot small variants and CNAs with different colours
+    snv_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max) & (tolower(mutationTypes) %in% c("snv", "indel", "small variant", "small variants"))
+    cna_indices = is.finite(mutationCopyNumber) & (mutationCopyNumber <= x.max) & (toupper(mutationTypes) == "CNA")
     hist(mutationCopyNumber[snv_indices], breaks = seq(-0.1, x.max, 0.025), col = rgb(211 / 255, 211 / 255, 211 / 255, 0.8), freq = FALSE, xlab = xlabel, main = "", ylim = c(0, y.max), cex.axis = 2, cex.lab = 2)
     hist(mutationCopyNumber[cna_indices], breaks = seq(-0.1, x.max, 0.025), col = rgb(255 / 255, 0, 0, 0.8), freq = FALSE, cex.axis = 2, cex.lab = 2, add = TRUE)
   }
@@ -110,12 +119,24 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
   conf.interval = data.frame(x=density[,1], ymax=(polygon.data[1:512] / sum(density$median.density)), ymin=(rev(polygon.data[513:1024]) / sum(density$median.density)))
   density$median.density = density$median.density / sum(density$median.density)
   ccf.df = as.data.frame(mutationCopyNumber / no.chrs.bearing.mut)
-  ccf.df$mutationType = mutationTypes
+  ccf.df$mutationType = as.character(mutationTypes)
+  ccf.df$mutationType[tolower(ccf.df$mutationType) %in% c("snv", "indel", "small variant", "small variants")] = "small variants"
+  ccf.df$mutationType[toupper(ccf.df$mutationType) == "CNA"] = "CNA"
+  ccf.df$mutationType = factor(ccf.df$mutationType, levels = unique(c("small variants", "CNA", setdiff(ccf.df$mutationType, c("small variants", "CNA")))))
+  
   # Filter for finite values to avoid stat_bin warnings
   ccf.df <- ccf.df[is.finite(ccf.df$V1), , drop=FALSE]
   
   if (is.na(y.max)) { y.max=max(conf.interval$ymax, na.rm = TRUE) }
-  if (is.na(x.max)) { x.max=ceiling(max(ccf.df$V1, na.rm = TRUE)) }
+  if (is.na(x.max)) {
+    finite_ccf <- ccf.df$V1[is.finite(ccf.df$V1)]
+    if (length(finite_ccf) > 0) {
+      x.max <- ceiling(max(finite_ccf, na.rm = TRUE) * 12) / 10
+      x.max <- max(1.5, min(3, x.max))
+    } else {
+      x.max <- 1.5
+    }
+  }
   
   # Ensure all plotting data is finite to avoid warnings
   conf.interval <- conf.interval[is.finite(conf.interval$x) & is.finite(conf.interval$ymin) & is.finite(conf.interval$ymax), ]
@@ -136,8 +157,7 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
           legend.text=element_text(size=font_sizes$legend.text),
           legend.title=element_text(size=font_sizes$legend.title),
           legend.position=font_sizes$legend.position) +
-    scale_fill_manual(values=cbPalette) +
-    scale_colour_discrete(drop=FALSE, limits=levels(ccf.df$mutationTypes))
+    scale_fill_manual(values=cbPalette, name = "Mutation type")
   
   # If cluster locations are provided, add them as a vertical line with nr of mutations mentioned
   if(!is.null(cluster.locations) & !is.null(mutation.assignments)) {
@@ -184,7 +204,7 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
 plotAssignmentTable = function(cluster_locations, pngFile, cndata=NULL, num_samples=1, indeldata=NULL) {
   # Set the naming for the figure
   cluster_locations = as.data.frame(cluster_locations)
-  colnames(cluster_locations) = c("Cluster", "Location", rep("", num_samples-1), "Num SNVs")
+  colnames(cluster_locations) = c("Cluster", "Location", rep("", num_samples-1), "Num variants")
   # Order by ascending cluster number
   cluster_locations = cluster_locations[with(cluster_locations, order(-Cluster)),]
   
