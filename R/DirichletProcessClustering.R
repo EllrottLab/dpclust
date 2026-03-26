@@ -22,7 +22,7 @@
 #' @return A list containing these components
 #' @author sd11
 #' @export
-make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL, conc_param = 0.01, density_smooth = NA_real_, hypercube_size = 5, cluster_conc = 5) {
+make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL, conc_param = 0.01, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5, cluster_conc = 5) {
   if (is.null(supported_chroms)) {
     if (species == "human" | species == "Human") {
       # Set the expected chromosomes based on the sex
@@ -52,6 +52,7 @@ make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num
     prefix = prefix,
     conc_param = conc_param,
     density_smooth = density_smooth,
+    x_max_cap = x_max_cap,
     hypercube_size = hypercube_size,
     cluster_conc = cluster_conc
   ))
@@ -146,6 +147,7 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
   min_muts_cluster <- if ("min_muts_cluster" %in% names(run_params) && !is.null(run_params$min_muts_cluster)) run_params$min_muts_cluster else -1
   min_frac_muts_cluster <- if ("min_frac_muts_cluster" %in% names(run_params) && !is.null(run_params$min_frac_muts_cluster)) run_params$min_frac_muts_cluster else 0.01
   density_smooth <- if ("density_smooth" %in% names(run_params)) run_params$density_smooth else NA_real_
+  x_max_cap <- if ("x_max_cap" %in% names(run_params)) run_params$x_max_cap else 3
   hypercube_size <- if ("hypercube_size" %in% names(run_params)) run_params$hypercube_size else 5
   cluster_conc <- if ("cluster_conc" %in% names(run_params)) run_params$cluster_conc else advanced_params$cluster_conc
   conc_param <- if ("conc_param" %in% names(run_params)) run_params$conc_param else advanced_params$conc_param
@@ -384,6 +386,7 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       conflict.array = dataset$conflict.array,
       keep_temp_files = keep_temp_files,
       density_smooth = density_smooth,
+      x_max_cap = x_max_cap,
       hypercube_size = hypercube_size
     )
     GS.data <- clustering$GS.data
@@ -402,7 +405,8 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       dataset = dataset,
       clustering = clustering,
       density = density,
-      polygon.data = polygon.data
+      polygon.data = polygon.data,
+      x_max_cap = x_max_cap
     )
   } else if (analysis_type == "replot_nd") {
     log_info("Remaking plots...")
@@ -437,7 +441,8 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       GS.data = GS.data,
       conc_param = conc_param,
       cluster_conc = cluster_conc,
-      mut.assignment.type = mut.assignment.type
+      mut.assignment.type = mut.assignment.type,
+      x_max_cap = x_max_cap
     )
     clustering <- res$clustering
     outfiles.prefix <- res$outfiles.prefix
@@ -525,7 +530,8 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       generate_cluster_ordering = generate_cluster_ordering,
       min_muts_cluster = min_muts_cluster,
       min_frac_muts_cluster = min_frac_muts_cluster,
-      num_threads = num_threads
+      num_threads = num_threads,
+      x_max_cap = x_max_cap
     )
   }
 
@@ -601,7 +607,7 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
 #' @param generate_cluster_ordering Boolean specifying whether a possible cluster ordering should be determined (Default: FALSE)
 #' @param no.samples.cluster.order Number of mutations to sample (with replacement) to classify pairs of clusters into parent-offspring or siblings (Default: 1000)
 #' @author sd11
-writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outfiles.prefix, outdir, samplename, subsamplenames, GS.data, density, polygon.data, no.iters, no.iters.burn.in, min_muts_cluster, min_frac_muts_cluster, assign_sampled_muts = TRUE, write_tree = FALSE, generate_cluster_ordering = FALSE, no.samples.cluster.order = 1000, num_threads = NA_integer_) {
+writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outfiles.prefix, outdir, samplename, subsamplenames, GS.data, density, polygon.data, no.iters, no.iters.burn.in, min_muts_cluster, min_frac_muts_cluster, assign_sampled_muts = TRUE, write_tree = FALSE, generate_cluster_ordering = FALSE, no.samples.cluster.order = 1000, num_threads = NA_integer_, x_max_cap = 3) {
   num_samples <- ncol(dataset$mutCount)
 
   if (num_samples > 1 & generate_cluster_ordering == TRUE) {
@@ -653,6 +659,7 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
           pngFile = paste(outdir, "/", samplename, "_DirichletProcessplot_with_cluster_locations.png", sep = ""),
           density.from = 0,
           x.max = NA,
+          x.max.cap = x_max_cap,
           mutationCopyNumber = dataset$mutation.copy.number,
           no.chrs.bearing.mut = dataset$copyNumberAdjustment,
           samplename = samplename,
@@ -667,6 +674,7 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
           pngFile = paste(outdir, "/", samplename, "_DirichletProcessplot_with_cluster_locations_2.png", sep = ""),
           density.from = 0,
           x.max = NA,
+          x.max.cap = x_max_cap,
           mutationCopyNumber = dataset$mutation.copy.number,
           no.chrs.bearing.mut = dataset$copyNumberAdjustment,
           samplename = samplename,
@@ -979,7 +987,7 @@ flatten_3d_to_2d <- function(data, col_names) {
 #' @param mutationTypes Vector with mutation types, used for plotting
 #' @param max.considered.clusters Maximum number of clusters to consider
 #' @author sd11
-DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_, conflict.array = .init_conflicts(), keep_temp_files = TRUE, density_smooth = NA_real_, hypercube_size = 5) {
+DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_, conflict.array = .init_conflicts(), keep_temp_files = TRUE, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5) {
   output_folder <- normalizePath(output_folder, mustWork = FALSE)
   if (!dir.exists(output_folder)) {
     dir.create(output_folder, recursive = TRUE, showWarnings = FALSE)
@@ -1085,6 +1093,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       post.burn.in.stop = no.iters,
       y.max = 15,
       x.max = NA,
+      x.max.cap = x_max_cap,
       mutationCopyNumber = mutation.copy.number,
       no.chrs.bearing.mut = copyNumberAdjustment,
       density.smooth = density_smooth_1d
@@ -1134,6 +1143,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       pngFile = file.path(output_folder, paste(samplename, "_DirichletProcessplot_with_cluster_locations.png", sep = "")),
       density.from = 0,
       x.max = NA,
+      x.max.cap = x_max_cap,
       mutationCopyNumber = mutation.copy.number,
       no.chrs.bearing.mut = copyNumberAdjustment,
       samplename = samplename,
@@ -1147,6 +1157,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       pngFile = file.path(output_folder, paste(samplename, "_DirichletProcessplot_with_cluster_locations_2.png", sep = "")),
       density.from = 0,
       x.max = NA,
+      x.max.cap = x_max_cap,
       mutationCopyNumber = mutation.copy.number,
       no.chrs.bearing.mut = copyNumberAdjustment,
       samplename = samplename,

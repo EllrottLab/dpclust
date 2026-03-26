@@ -2,7 +2,7 @@
 # Convenience functions for the pipelie
 #
 
-replot_1D <- function(outdir, outfiles.prefix, samplename, dataset, clustering, density, polygon.data) {
+replot_1D <- function(outdir, outfiles.prefix, samplename, dataset, clustering, density, polygon.data, x_max_cap = 3) {
   # Old plot
   plot1D(
     density = density,
@@ -10,6 +10,7 @@ replot_1D <- function(outdir, outfiles.prefix, samplename, dataset, clustering, 
     pngFile = paste(outdir, "/", samplename, "_DirichletProcessplot_with_cluster_locations_replot.png", sep = ""),
     density.from = 0,
     x.max = NA,
+    x.max.cap = x_max_cap,
     mutationCopyNumber = dataset$mutation.copy.number,
     no.chrs.bearing.mut = dataset$copyNumberAdjustment,
     samplename = samplename,
@@ -24,6 +25,7 @@ replot_1D <- function(outdir, outfiles.prefix, samplename, dataset, clustering, 
     pngFile = paste(outdir, "/", samplename, "_DirichletProcessplot_with_cluster_locations_2_replot.png", sep = ""),
     density.from = 0,
     x.max = NA,
+    x.max.cap = x_max_cap,
     mutationCopyNumber = dataset$mutation.copy.number,
     no.chrs.bearing.mut = dataset$copyNumberAdjustment,
     samplename = samplename,
@@ -33,7 +35,7 @@ replot_1D <- function(outdir, outfiles.prefix, samplename, dataset, clustering, 
   )
 }
 
-reassign_1D <- function(outdir, samplename, no.iters, no.iters.burn.in, dataset, cellularity, GS.data, conc_param, cluster_conc, mut.assignment.type) {
+reassign_1D <- function(outdir, samplename, no.iters, no.iters.burn.in, dataset, cellularity, GS.data, conc_param, cluster_conc, mut.assignment.type, x_max_cap = 3) {
   # Use absolute path so this works both locally and inside containers
   outdir <- normalizePath(outdir, mustWork = FALSE)
 
@@ -45,6 +47,7 @@ reassign_1D <- function(outdir, samplename, no.iters, no.iters.burn.in, dataset,
     post.burn.in.stop = no.iters,
     y.max = 15,
     x.max = NA,
+    x.max.cap = x_max_cap,
     mutationCopyNumber = dataset$mutation.copy.number,
     no.chrs.bearing.mut = dataset$copyNumberAdjustment
   )
@@ -88,6 +91,7 @@ reassign_1D <- function(outdir, samplename, no.iters, no.iters.burn.in, dataset,
     pngFile = paste0(outfiles.prefix, "_DirichletProcessplot_with_cluster_locations_2.png"),
     density.from = 0,
     x.max = NA,
+    x.max.cap = x_max_cap,
     mutationCopyNumber = dataset$mutation.copy.number,
     no.chrs.bearing.mut = dataset$copyNumberAdjustment,
     mutationTypes = dataset$mutationType,

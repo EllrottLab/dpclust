@@ -40,6 +40,7 @@ dpclust_cli <- function() {
     optparse::make_option(c("--bin_size"), type = "double", default = NULL, help = "Binsize for multi-dimensional density", metavar = "double"),
     optparse::make_option(c("--seed"), type = "integer", default = 123, help = "Random seed [default: %default]", metavar = "integer"),
     optparse::make_option(c("--density_smooth"), type = "numeric", default = NA_real_, help = "Optional smoothing override (default: algorithm-specific; 0.1 for 1D, 0.01 for nD assignment)", metavar = "numeric"),
+    optparse::make_option(c("--x_max_cap"), type = "numeric", default = 3, help = "Maximum x-axis value for Fraction of Tumour Cells auto-scaling [default: %default]", metavar = "numeric"),
     optparse::make_option(c("--hypercube_size"), type = "integer", default = 5, help = "Window size for peak detection [default: %default]", metavar = "integer"),
     optparse::make_option(c("--cluster_conc"), type = "numeric", default = 5, help = "Concentration parameter for cluster variance [default: %default]", metavar = "numeric"),
     optparse::make_option(c("--conc_param"), type = "numeric", default = 0.01, help = "Dirichlet process concentration parameter (alpha) [default: %default]", metavar = "numeric"),
@@ -194,6 +195,7 @@ dpclust_cli <- function() {
       add_conflicts = opt$add_conflicts,
       cna_conflicting_events_only = opt$cna_conflicting_events_only,
       density_smooth = opt$density_smooth,
+      x_max_cap = opt$x_max_cap,
       hypercube_size = opt$hypercube_size,
       cluster_conc = opt$cluster_conc,
       conc_param = opt$conc_param
@@ -222,6 +224,7 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                  add_conflicts = FALSE,
                                  cna_conflicting_events_only = FALSE,
                                  density_smooth = NA_real_,
+                                 x_max_cap = 3,
                                  hypercube_size = 5,
                                  cluster_conc = 5,
                                  conc_param = 0.01) {
@@ -237,6 +240,9 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
   }
   if (!is.na(num_muts_sample) && num_muts_sample > 0 && num_muts_sample < 10000) {
     warning(sprintf("num_muts_sample=%d is low and may hide minor peaks in high-mutation samples. Typical value is 50000.", as.integer(num_muts_sample)))
+  }
+  if (!is.na(x_max_cap) && (!is.finite(x_max_cap) || x_max_cap <= 0)) {
+    stop(sprintf("x_max_cap must be a positive finite number (or NA). Got: %s", as.character(x_max_cap)))
   }
   
   # Configure data.table threading
@@ -329,6 +335,7 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     remove.snvs = FALSE,
     prefix = prefix,
     density_smooth = density_smooth,
+    x_max_cap = x_max_cap,
     hypercube_size = hypercube_size,
     cluster_conc = cluster_conc,
     conc_param = conc_param
@@ -359,7 +366,7 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     iterations, burnin, mut_assignment_type, num_muts_sample,
     seed, assign_sampled_muts, keep_temp_files,
     min_muts_cluster, min_frac_muts_cluster,
-    density_smooth, hypercube_size, cluster_conc, conc_param
+    density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param
   )
 
   log_info("DPClust pipeline completed.")
@@ -424,7 +431,7 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                       iterations, burnin, mut_assignment_type, num_muts_sample,
                                       seed, assign_sampled_muts, keep_temp_files,
                                       min_muts_cluster, min_frac_muts_cluster,
-                                      density_smooth, hypercube_size, cluster_conc, conc_param) {
+                                      density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param) {
   prefix_delim <- if (!is.null(prefix) && nchar(prefix) > 0) paste0("_", prefix, "_") else "_"
   param_file <- file.path(outdir, paste0(samplename, prefix_delim, "dpclust_run_parameters.tsv"))
 
@@ -437,7 +444,7 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
       "iterations", "burnin", "mut_assignment_type", "num_muts_sample", "seed",
       "assign_sampled_muts", "keep_temp_files", "min_muts_cluster",
       "min_frac_muts_cluster", "prefix", "input_loci_count",
-      "density_smooth", "hypercube_size", "cluster_conc", "conc_param"
+      "density_smooth", "x_max_cap", "hypercube_size", "cluster_conc", "conc_param"
     ),
     value = c(
       as.character(Sys.time()), as.character(packageVersion("DPClust")), samplename,
@@ -445,7 +452,7 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
       num_muts_sample, seed, assign_sampled_muts, keep_temp_files,
       min_muts_cluster, min_frac_muts_cluster, if (is.null(prefix)) "NA" else prefix,
       input_loci_count,
-      density_smooth, hypercube_size, cluster_conc, conc_param
+      density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param
     ),
     stringsAsFactors = FALSE
   )

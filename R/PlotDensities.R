@@ -20,7 +20,7 @@
 #' @param mutation.assignments Mutation assignments (Default: NULL)
 #' @param mutationTypes Type of each mutation, different mutation types can be plot with different colours (Default: NULL)
 #' @author dw9, sd11
-plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y.max=NA, y=NULL, N=NULL, mutationCopyNumber=NULL, no.chrs.bearing.mut=NULL,samplename="",CALR=numeric(0), cluster.locations=NULL, mutation.assignments=NULL, mutationTypes=NULL) {
+plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y.max=NA, y=NULL, N=NULL, mutationCopyNumber=NULL, no.chrs.bearing.mut=NULL,samplename="",CALR=numeric(0), cluster.locations=NULL, mutation.assignments=NULL, mutationTypes=NULL, x.max.cap=3) {
   if (!is.na(pngFile)) { png(filename=pngFile,width=1500,height=1000) }
   
   # Convert data into the space that was used for the clustering. This is done dynamically through the given data.
@@ -48,7 +48,11 @@ plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y
     finite_mcn <- mutationCopyNumber[is.finite(mutationCopyNumber)]
     if (length(finite_mcn) > 0) {
       x.max <- ceiling(max(finite_mcn, na.rm = TRUE) * 12) / 10
-      x.max <- max(1.5, min(3, x.max))
+      if (is.na(x.max.cap) || !is.finite(x.max.cap)) {
+        x.max <- max(1.5, x.max)
+      } else {
+        x.max <- max(1.5, min(x.max.cap, x.max))
+      }
     } else {
       x.max <- 1.5
     }
@@ -113,7 +117,7 @@ plot1D = function(density, polygon.data, pngFile=NA, density.from=0, x.max=NA, y
 #' @param font_sizes A list that defines the size of the fonts in the title, axis and legends (Default: Best settings for 1500x1000 plot).
 #' @param cbPalette Colours for mutation types: Grey for first mutation type (SNVs), orange for second (CNAs), as defined in LoadData
 #' @author sd11
-plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.mut, pngFile=NA, density.from=0, x.max=NA, y.max=NA, y=NULL, N=NULL, samplename="", CALR=numeric(0), cluster.locations=NULL, mutation.assignments=NULL, mutationTypes=rep("SNV", length(mutationCopyNumber)), font_sizes = list(plot.title = 50, axis.text = 25, axis.title = 35, legend.text = 25, legend.title = 25, legend.position = "bottom"), cbPalette = c("lightgray", "red", "blue")) {
+plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.mut, pngFile=NA, density.from=0, x.max=NA, y.max=NA, y=NULL, N=NULL, samplename="", CALR=numeric(0), cluster.locations=NULL, mutation.assignments=NULL, mutationTypes=rep("SNV", length(mutationCopyNumber)), font_sizes = list(plot.title = 50, axis.text = 25, axis.title = 35, legend.text = 25, legend.title = 25, legend.position = "bottom"), cbPalette = c("lightgray", "red", "blue"), x.max.cap=3) {
   colnames(density)[1] = "fraction.of.tumour.cells"
   
   conf.interval = data.frame(x=density[,1], ymax=(polygon.data[1:512] / sum(density$median.density)), ymin=(rev(polygon.data[513:1024]) / sum(density$median.density)))
@@ -132,7 +136,11 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
     finite_ccf <- ccf.df$V1[is.finite(ccf.df$V1)]
     if (length(finite_ccf) > 0) {
       x.max <- ceiling(max(finite_ccf, na.rm = TRUE) * 12) / 10
-      x.max <- max(1.5, min(3, x.max))
+      if (is.na(x.max.cap) || !is.finite(x.max.cap)) {
+        x.max <- max(1.5, x.max)
+      } else {
+        x.max <- max(1.5, min(x.max.cap, x.max))
+      }
     } else {
       x.max <- 1.5
     }
@@ -150,13 +158,14 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
     ylab("Density") +
     ggtitle(samplename) +
     theme_bw() +
-    coord_cartesian(xlim = c(0, x.max), ylim = c(0, y.max)) +
+    coord_cartesian(xlim = c(0, x.max), ylim = c(0, y.max), clip = "on") +
     theme(axis.text=element_text(size=font_sizes$axis.text),
           axis.title=element_text(size=font_sizes$axis.title),
           plot.title=element_text(size=font_sizes$plot.title, hjust=0.5),
           legend.text=element_text(size=font_sizes$legend.text),
           legend.title=element_text(size=font_sizes$legend.title),
-          legend.position=font_sizes$legend.position) +
+          legend.position=font_sizes$legend.position,
+          plot.margin = margin(10, 120, 10, 10)) +
     scale_fill_manual(values=cbPalette, name = "Mutation type")
   
   # If cluster locations are provided, add them as a vertical line with nr of mutations mentioned
@@ -172,16 +181,49 @@ plot1D_2 = function(density, polygon.data, mutationCopyNumber, no.chrs.bearing.m
     colnames(dat) = c("non_empty_cluster_ids", "non_empty_cluster_locations")
     dat$assignment_counts = assignment_counts
     dat$cluster_label = paste("Cluster", dat$non_empty_cluster_ids)
-    dat$mutation_label = paste(dat$assignment_counts, "mutations")
-    dat$y_pos1 = (9 / 10) * y.max
-    dat$y_pos2 = (9 / 10) * y.max - ((1 / 20) * y.max)
+    dat$mutation_label = ifelse(dat$assignment_counts == 1, "1 mutation", paste(dat$assignment_counts, "mutations"))
+    dat$label = paste(dat$cluster_label, dat$mutation_label, sep = "\n")
+    dat$near_right_edge <- dat$non_empty_cluster_locations > (0.92 * x.max)
+    dat$label_x <- ifelse(dat$near_right_edge, dat$non_empty_cluster_locations - 0.02, dat$non_empty_cluster_locations + 0.02)
+    dat$label_x <- pmin(pmax(dat$label_x, 0.02 * x.max), 0.98 * x.max)
+    dat$hjust <- ifelse(dat$near_right_edge, 1, 0)
+
+    # Estimate label span in x-units and pack labels into rows to avoid overlaps.
+    dat$label_width <- pmin(0.45 * x.max, pmax(0.14 * x.max, nchar(dat$mutation_label) * 0.012 * x.max))
+    dat$label_xmin <- ifelse(dat$near_right_edge, dat$label_x - dat$label_width, dat$label_x)
+    dat$label_xmax <- ifelse(dat$near_right_edge, dat$label_x, dat$label_x + dat$label_width)
+    dat <- dat[order(dat$label_xmin, dat$label_xmax), , drop = FALSE]
+    max_label_rows <- 6
+    row_xmax <- rep(-Inf, max_label_rows)
+    dat$label_row <- 1L
+    for (i in seq_len(nrow(dat))) {
+      placed <- FALSE
+      for (r in seq_len(max_label_rows)) {
+        if (dat$label_xmin[i] >= (row_xmax[r] + 0.02 * x.max)) {
+          dat$label_row[i] <- r
+          row_xmax[r] <- dat$label_xmax[i]
+          placed <- TRUE
+          break
+        }
+      }
+      if (!placed) {
+        r <- which.min(row_xmax)
+        dat$label_row[i] <- r
+        row_xmax[r] <- dat$label_xmax[i]
+      }
+    }
+
+    row_height <- 0.09 * y.max
+    dat$label_y <- (0.93 * y.max) - ((dat$label_row - 1) * row_height)
+
+    # Keep annotation fully inside the visible x-range.
+    dat <- dat[dat$non_empty_cluster_locations <= x.max, , drop = FALSE]
 
     # Only attempt to plot when the lines will be within the bounds of the figure, otherwise this will crash
-    if (any(dat$non_empty_cluster_locations < x.max)) {
+    if (nrow(dat) > 0) {
       # Plot a line for each cluster, the cluster id and the number of mutations assigned to it
       p = p + geom_segment(data = dat, mapping = aes(x = non_empty_cluster_locations, xend = non_empty_cluster_locations, y = 0, yend = y.max), linewidth = 1, na.rm = TRUE) +
-        geom_text(data = dat, mapping = aes(x = (non_empty_cluster_locations + 0.01), y = y_pos1, label = cluster_label, hjust = 0), size = 8, na.rm = TRUE) +
-        geom_text(data = dat, mapping = aes(x = (non_empty_cluster_locations + 0.01), y = y_pos2, label = mutation_label, hjust = 0), size = 8, na.rm = TRUE)
+        geom_label(data = dat, mapping = aes(x = label_x, y = label_y, label = label, hjust = hjust), size = 7, lineheight = 0.95, label.size = 0.25, fill = "white", alpha = 0.9, na.rm = TRUE)
     }
   }
   

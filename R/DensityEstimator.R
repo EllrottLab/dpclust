@@ -39,7 +39,7 @@ DensityEstimator <- function(clustered.thetas, thetas, density.smooth = 0.1, den
   return(xx[which.max(yy)])
 }
 
-Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.smooth = 0.1, post.burn.in.start = 3000, post.burn.in.stop = 10000, density.from = 0, x.max = 2, y.max = 5, mutationCopyNumber = NULL, no.chrs.bearing.mut = NULL) {
+Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.smooth = 0.1, post.burn.in.start = 3000, post.burn.in.stop = 10000, density.from = 0, x.max = 2, y.max = 5, mutationCopyNumber = NULL, no.chrs.bearing.mut = NULL, x.max.cap = 3) {
   # GS.data is the list output from the above function
   # density.smooth is the smoothing factor used in R's density() function
   # post.burn.in.start is the number of iterations to drop from the Gibbs sampler output to allow the estimates to equilibrate on the posterior
@@ -81,9 +81,13 @@ Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.
     finite_mcn <- mutationCopyNumber[is.finite(mutationCopyNumber)]
     if (length(finite_mcn) > 0) {
       x.max <- ceiling(max(finite_mcn, na.rm = TRUE) * 12) / 10
-      x.max <- max(1.5, min(3, x.max))
+      if (is.na(x.max.cap) || !is.finite(x.max.cap)) {
+        x.max <- max(1.5, x.max)
+      } else {
+        x.max <- max(1.5, min(x.max.cap, x.max))
+      }
     } else {
-      x.max <- 1.5 # Standard fallback
+      x.max <- 2 # Standard fallback
     }
   }
 
@@ -131,6 +135,7 @@ Gibbs.subclone.density.est.1d <- function(GS.data, pngFile, samplename, density.
     density.from = 0,
     y.max = y.max,
     x.max = x.max,
+    x.max.cap = x.max.cap,
     mutationCopyNumber = mutationCopyNumber.original,
     no.chrs.bearing.mut = no.chrs.bearing.mut,
     samplename = samplename
