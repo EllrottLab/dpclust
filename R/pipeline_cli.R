@@ -24,9 +24,11 @@ dpclust_cli <- function() {
   option_list <- list(
     # Core Analysis & Sample Info
     optparse::make_option(c("-r", "--run_sample"), type = "integer", default = NULL, help = "Sample index to run (from input file)", metavar = "integer"),
-    optparse::make_option(c("-d", "--data_path"), type = "character", default = NULL, help = "Path to where dpinput data files are stored", metavar = "path"),
+    optparse::make_option(c("-d", "--data_path"), dest = "data_path", type = "character", default = NULL, help = "Path to where dpinput data files are stored", metavar = "path"),
+    optparse::make_option(c("--dpclust3P_input_folder"), dest = "data_path", type = "character", default = NULL, help = "Alias for --data_path", metavar = "path"),
     optparse::make_option(c("-o", "--outputdir"), type = "character", default = getwd(), help = "Directory where the output is saved [default: %default]", metavar = "path"),
-    optparse::make_option(c("-i", "--input"), type = "character", default = NULL, help = "Design file (TSV) with sample information", metavar = "path"),
+    optparse::make_option(c("-i", "--input"), dest = "input", type = "character", default = NULL, help = "Design file (TSV) with sample information", metavar = "path"),
+    optparse::make_option(c("--dpclust_input"), dest = "input", type = "character", default = NULL, help = "Alias for --input", metavar = "path"),
     optparse::make_option(c("-p", "--prefix"), type = "character", default = NULL, help = "Optional prefix for output files (e.g. snv or indel)", metavar = "string"),
 
     # Clustering Parameters
@@ -77,7 +79,7 @@ dpclust_cli <- function() {
   # Validation
   if (is.null(opt$run_sample) || is.null(opt$data_path) || is.null(opt$input)) {
     optparse::print_help(parser)
-    stop("Missing required arguments: -r, -d, and -i are mandatory.", call. = FALSE)
+    stop("Missing required arguments: -r, -d (--dpclust3P_input_folder), and -i (--dpclust_input) are mandatory.", call. = FALSE)
   }
 
   log_info(strrep("=", 120))
@@ -366,7 +368,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     iterations, burnin, mut_assignment_type, num_muts_sample,
     seed, assign_sampled_muts, keep_temp_files,
     min_muts_cluster, min_frac_muts_cluster,
-    density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param
+    density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param,
+    data_path = datpath, datafiles = datafiles
   )
 
   log_info("DPClust pipeline completed.")
@@ -431,12 +434,30 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                       iterations, burnin, mut_assignment_type, num_muts_sample,
                                       seed, assign_sampled_muts, keep_temp_files,
                                       min_muts_cluster, min_frac_muts_cluster,
-                                      density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param) {
-  prefix_delim <- if (!is.null(prefix) && nchar(prefix) > 0) paste0("_", prefix, "_") else "_"
+                                      density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param,
+                                      data_path = NULL, datafiles = NULL) {
+  # Standardized prefix delimiter (double underscore) to keep consistency with dpclust3p patterns
+  prefix_delim <- if (!is.null(prefix) && nchar(prefix) > 0) paste0("__", prefix, "__") else "__"
   param_file <- file.path(outdir, paste0(samplename, prefix_delim, "dpclust_run_parameters.tsv"))
 
-  info_files <- Sys.glob(file.path(outdir, "*__allDirichletProcessInfo.txt"))
-  input_loci_count <- if (length(info_files) == 1) length(readLines(info_files[1], warn = FALSE)) - 1 else NA
+  # Locate input file to count loci
+  input_file <- NA
+  if (!is.null(datafiles) && length(datafiles) > 0) {
+    potential_input <- if (!is.null(data_path) && nchar(data_path) > 0) file.path(data_path, datafiles[1]) else datafiles[1]
+    if (file.exists(potential_input)) {
+        input_file <- potential_input
+    }
+  }
+
+  # Fallback to glob in outdir if files not provided or not found
+  if (is.na(input_file)) {
+      info_files <- Sys.glob(file.path(outdir, "*__allDirichletProcessInfo.txt"))
+      if (length(info_files) > 0) {
+          input_file <- info_files[1]
+      }
+  }
+
+  input_loci_count <- if (!is.na(input_file)) length(readLines(input_file, warn = FALSE)) - 1 else NA
 
   params_df <- data.frame(
     parameter = c(
