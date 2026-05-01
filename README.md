@@ -31,6 +31,8 @@ cd dpclust/inst/example
 ./run_nd.sh 
 ```
 
+DPClust includes an automatic winner's curse correction for low-purity or low-CCF samples where mutation discovery is biased toward variants with unusually high mutant read support. See [docs/winners-curse.md](docs/winners-curse.md) for the model assumptions, auto-detection criteria, logging, and CLI controls.
+
 ## Docker
 
 Run DPClust on provided example data. After checking out this repository, build the image:
@@ -107,4 +109,3 @@ DPClust creates the following output for a multi-sample case
 |*_bestConsensusResults.RData		| R data file with all the output |
 |*_mutation_assignments.png | Table figure showing the called mutation clusters |
 |*_most_likely_cluster_assignment_0.01.pdf  | Graphical depiction of the mutation assignments |
-
