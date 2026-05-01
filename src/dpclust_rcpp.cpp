@@ -34,6 +34,68 @@ inline double clamp_prob(double x) {
     return x;
 }
 
+inline double log_detection_prob_from_logq(double depth, double p, double logq, int threshold) {
+    if (threshold <= 0) return 0.0;
+    if (depth < threshold) return R_NegInf;
+
+    double q = 1.0 - p;
+    double qn = std::exp(depth * logq);
+
+    double miss = 0.0;
+    if (threshold == 1) {
+        miss = qn;
+    } else if (q <= 0.0) {
+        miss = 0.0;
+    } else {
+        double ratio = p / q;
+        if (threshold == 2) {
+            miss = qn * (1.0 + depth * ratio);
+        } else if (threshold == 3) {
+            double depth_choose_2 = 0.5 * depth * (depth - 1.0);
+            miss = qn * (1.0 + depth * ratio + depth_choose_2 * ratio * ratio);
+        } else {
+            miss = qn;
+            double term = qn;
+            for (int j = 1; j < threshold; ++j) {
+                term *= ((depth - j + 1.0) / j) * ratio;
+                miss += term;
+            }
+        }
+    }
+
+    if (miss <= 0.0) return 0.0;
+    if (miss >= 1.0) return R_NegInf;
+    return std::log1p(-miss);
+}
+
+inline double log_detection_prob(double depth, double p, int threshold) {
+    return log_detection_prob_from_logq(depth, p, std::log1p(-p), threshold);
+}
+
+inline double log_conditional_binom_kernel_fast(double mut, double wt, double depth, bool correct_detection, double p, double logp, double logq, int threshold) {
+    double ll = mut * logp + wt * logq;
+    if (correct_detection) {
+        ll -= log_detection_prob_from_logq(depth, p, logq, threshold);
+    }
+    return ll;
+}
+
+inline double log_conditional_binom_kernel(double mut, double wt, double depth, double p, int threshold, bool winner_curse_correction) {
+    double logq = std::log1p(-p);
+    return log_conditional_binom_kernel_fast(mut, wt, depth, winner_curse_correction && mut >= threshold, p, std::log(p), logq, threshold);
+}
+
+inline double reflect_to_bounds(double x, double lower, double upper) {
+    if (upper <= lower) return lower;
+    for (int i = 0; i < 8 && (x < lower || x > upper); ++i) {
+        if (x < lower) x = lower + (lower - x);
+        if (x > upper) x = upper - (x - upper);
+    }
+    if (x < lower) return lower;
+    if (x > upper) return upper;
+    return x;
+}
+
 /**
  * Converts observed mutation burden (VAF equivalent) to Mutation Copy Number.
  * This is the 'biological' unit used for clustering optima.
@@ -52,7 +114,10 @@ double mutationBurdenToMutationCopyNumber(double burden, double totalCopyNumber,
 struct MutationRow {
     double mut;      // Mutant allele counts
     double wt;       // Wild-type allele counts
+    double depth;    // Total read depth
     double mb_unit;  // Pre-calculated burden constant (expected burden at CCF=1)
+    double log_mb_unit;
+    bool observed_at_detection_threshold;
 };
 
 /**
@@ -68,6 +133,10 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
                                   bool keep_aux_fields,
                                   int num_threads,
                                   IntegerVector stored_iters,
+                                  bool winner_curse_correction = true,
+                                  int winner_curse_threshold = 3,
+                                  double winner_curse_mh_sd = 0.12,
+                                  int winner_curse_mh_steps = 8,
                                   IntegerVector conflict_i = IntegerVector::create(), 
                                   IntegerVector conflict_j = IntegerVector::create(), 
                                   NumericVector conflict_w = NumericVector::create(),
@@ -152,10 +221,13 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
             MutationRow& row = mut_data[static_cast<size_t>(k) * num_timepoints + t];
             row.mut = mut_ptr[k];
             row.wt = wt_ptr[k];
+            row.depth = row.mut + row.wt;
+            row.observed_at_detection_threshold = row.mut >= winner_curse_threshold;
             // Algebraically hoist the burden conversion denominator
             double denom = cell_t * tcn_ptr[k] + ncn_ptr[k] * (1.0 - cell_t);
             double mb_unit = (std::abs(denom) < 1e-9) ? 0.000001 : (cell_t / denom) * cna_ptr[k];
             row.mb_unit = (std::isfinite(mb_unit) && mb_unit > 1e-6) ? mb_unit : 1e-6;
+            row.log_mb_unit = std::log(row.mb_unit);
         }
     }
 
@@ -171,7 +243,7 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
         double max_val = R_NegInf;
         for (int k = 0; k < num_muts; ++k) {
             const MutationRow& row = mut_data[static_cast<size_t>(k) * num_timepoints + t];
-            double burden = row.mut / (row.mut + row.wt);
+            double burden = row.mut / row.depth;
             if (!std::isfinite(burden)) burden = 0; 
             double mcn = mutationBurdenToMutationCopyNumber(burden, totalCopyNumber(k, t), cellularity[t], normalCopyNumber(k, t));
             mcn /= copyNumberAdjustment(k, t);
@@ -181,6 +253,10 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
         lower[t] = min_val; upper[t] = max_val;
         double diff = upper[t] - lower[t];
         lower[t] -= diff / 10.0; upper[t] += diff / 10.0;
+        if (winner_curse_correction) {
+            lower[t] = 1e-6;
+            upper[t] = std::max(upper[t], max_val * 1.25 + 1e-3);
+        }
         std::uniform_real_distribution<double> start_dist(lower[t], upper[t]);
         for (int c = 0; c < C; ++c) pi_h[0 + iter * c + iter * C * t] = start_dist(thread_rngs[0]);
     }
@@ -205,6 +281,7 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
     std::vector<double> shape_sums(ct, 0.0);
     std::vector<double> rate_sums(ct, 0.0);
     std::vector<int> cluster_counts(C, 0);
+    std::vector<std::vector<int>> cluster_members(C);
 
     // 7. MAIN GIBBS SAMPLING LOOP
     for (int m = 1; m < iter; ++m) {
@@ -225,9 +302,12 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
 
         // Compact current CCF slice for the assignment loop
         std::vector<double> current_ccfs(ct);
+        std::vector<double> log_current_ccfs(ct);
         for (int c = 0; c < C; ++c) {
             for (int t = 0; t < num_timepoints; ++t) {
-                current_ccfs[c + C * t] = pi_h[(m - 1) + iter * c + iter * C * t];
+                int idx = c + C * t;
+                current_ccfs[idx] = pi_h[(m - 1) + iter * c + iter * C * t];
+                log_current_ccfs[idx] = std::log(std::max(current_ccfs[idx], 1e-300));
             }
         }
 
@@ -252,11 +332,15 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
                 for (int t = 0; t < num_timepoints; ++t) {
                     const MutationRow& row = mut_data[mut_offset + t];
                     const double* ccfs_t = &current_ccfs[C * t];
+                    const double* log_ccfs_t = &log_current_ccfs[C * t];
+                    const bool correct_detection = winner_curse_correction && row.observed_at_detection_threshold;
                     
                     for (int c = 0; c < C; ++c) {
                         double mb = clamp_prob(ccfs_t[c] * row.mb_unit);
-                        // Log-Binomial likelihood (approximated for speed)
-                        Pr_S[c] += row.mut * std::log(mb) + row.wt * std::log1p(-mb);
+                        // Log-Binomial likelihood, optionally conditioned on variant detectability.
+                        double logp = (mb > 1e-6 && mb < 0.999999) ? log_ccfs_t[c] + row.log_mb_unit : std::log(mb);
+                        double logq = std::log1p(-mb);
+                        Pr_S[c] += log_conditional_binom_kernel_fast(row.mut, row.wt, row.depth, correct_detection, mb, logp, logq, winner_curse_threshold);
                     }
                 }
                 
@@ -304,9 +388,13 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
             for (int t = 0; t < num_timepoints; ++t) {
                 const MutationRow& row = mut_data[mut_offset + t];
                 const double* ccfs_t = &current_ccfs[C * t];
+                const double* log_ccfs_t = &log_current_ccfs[C * t];
+                const bool correct_detection = winner_curse_correction && row.observed_at_detection_threshold;
                 for (int c = 0; c < C; ++c) {
                     double mb = clamp_prob(ccfs_t[c] * row.mb_unit);
-                    Pr_S[c] += row.mut * std::log(mb) + row.wt * std::log1p(-mb);
+                    double logp = (mb > 1e-6 && mb < 0.999999) ? log_ccfs_t[c] + row.log_mb_unit : std::log(mb);
+                    double logq = std::log1p(-mb);
+                    Pr_S[c] += log_conditional_binom_kernel_fast(row.mut, row.wt, row.depth, correct_detection, mb, logp, logq, winner_curse_threshold);
                 }
             }
             if (!conflicts_adj[k].empty()) {
@@ -329,7 +417,14 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
         
         // Count mutations assigned to each cluster
         std::fill(cluster_counts.begin(), cluster_counts.end(), 0);
-        for (int k = 0; k < num_muts; ++k) cluster_counts[S_curr[k] - 1]++;
+        if (winner_curse_correction) {
+            for (int c = 0; c < C; ++c) cluster_members[c].clear();
+        }
+        for (int k = 0; k < num_muts; ++k) {
+            int c = S_curr[k] - 1;
+            cluster_counts[c]++;
+            if (winner_curse_correction) cluster_members[c].push_back(k);
+        }
         
         // Step B: Update stick weights (V_h) using Beta posterior
         int cumulative_count = 0;
@@ -361,7 +456,7 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
                 for (int t = 0; t < num_timepoints; ++t) {
                     const MutationRow& row = mut_data[mut_offset + t];
                     sh_loc[c + C * t] += row.mut;
-                    rt_loc[c + C * t] += (row.mut + row.wt) * row.mb_unit;
+                    rt_loc[c + C * t] += row.depth * row.mb_unit;
                 }
             }
         }
@@ -386,18 +481,72 @@ List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount,
             for (int t = 0; t < num_timepoints; ++t) {
                 const MutationRow& row = mut_data[mut_offset + t];
                 shape_sums[c + C * t] += row.mut;
-                rate_sums[c + C * t] += (row.mut + row.wt) * row.mb_unit;
+                rate_sums[c + C * t] += row.depth * row.mb_unit;
             }
         }
 #endif
 
-        // Step D: Update cluster positions (pi_h) using Gamma conjugate posterior
-        for (int c = 0; c < C; ++c) {
-            if (cluster_counts[c] == 0) continue;
-            for (int t = 0; t < num_timepoints; ++t) {
-                int idx = c + C * t;
-                double s = shape_sums[idx]; double r = rate_sums[idx];
-                pi_h[m + iter * c + iter * C * t] = (r == 0) ? 0.0 : R::rgamma(s, 1.0 / r);
+        // Step D: Update cluster positions (pi_h). The winner's curse likelihood is
+        // non-conjugate, so use independent Metropolis updates per cluster/sample.
+        if (winner_curse_correction) {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+            for (int idx = 0; idx < ct; ++idx) {
+                int t = idx / C;
+                int c = idx % C;
+                if (cluster_counts[c] == 0) continue;
+
+#ifdef _OPENMP
+                int tid = omp_get_thread_num();
+#else
+                int tid = 0;
+#endif
+                std::mt19937& rng = thread_rngs[tid];
+                std::uniform_real_distribution<double> udist(0.0, 1.0);
+
+                auto cluster_log_target = [&](double ccf) {
+                    double total = 0.0;
+                    double log_ccf = std::log(std::max(ccf, 1e-300));
+                    for (int k : cluster_members[c]) {
+                        const MutationRow& row = mut_data[static_cast<size_t>(k) * num_timepoints + t];
+                        double mb = clamp_prob(ccf * row.mb_unit);
+                        double logp = (mb > 1e-6 && mb < 0.999999) ? log_ccf + row.log_mb_unit : std::log(mb);
+                        double logq = std::log1p(-mb);
+                        total += log_conditional_binom_kernel_fast(row.mut, row.wt, row.depth, row.observed_at_detection_threshold, mb, logp, logq, winner_curse_threshold);
+                    }
+                    return total;
+                };
+
+                double current = pi_h[(m - 1) + iter * c + iter * C * t];
+                if (!std::isfinite(current) || current <= lower[t] || current > upper[t]) {
+                    double s = shape_sums[idx];
+                    double r = rate_sums[idx];
+                    current = (r == 0.0) ? lower[t] : reflect_to_bounds(s / r, lower[t], upper[t]);
+                }
+                current = reflect_to_bounds(current, lower[t], upper[t]);
+                double current_ll = cluster_log_target(current);
+                double proposal_sd = std::max(winner_curse_mh_sd, winner_curse_mh_sd * std::max(current, 1.0));
+                std::normal_distribution<double> ndist(0.0, proposal_sd);
+                for (int step = 0; step < winner_curse_mh_steps; ++step) {
+                    double proposal = reflect_to_bounds(current + ndist(rng), lower[t], upper[t]);
+                    double proposal_ll = cluster_log_target(proposal);
+                    double log_accept = proposal_ll - current_ll;
+                    if (std::log(udist(rng)) < log_accept) {
+                        current = proposal;
+                        current_ll = proposal_ll;
+                    }
+                }
+                pi_h[m + iter * c + iter * C * t] = current;
+            }
+        } else {
+            for (int c = 0; c < C; ++c) {
+                if (cluster_counts[c] == 0) continue;
+                for (int t = 0; t < num_timepoints; ++t) {
+                    int idx = c + C * t;
+                    double s = shape_sums[idx]; double r = rate_sums[idx];
+                    pi_h[m + iter * c + iter * C * t] = (r == 0) ? 0.0 : R::rgamma(s, 1.0 / r);
+                }
             }
         }
 

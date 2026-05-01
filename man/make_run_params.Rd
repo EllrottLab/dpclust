@@ -9,7 +9,12 @@ make_run_params(no.iters, no.iters.burn.in, mut.assignment.type,
   min_frac_muts_cluster = 0.01, species = "human",
   assign_sampled_muts = TRUE, supported_chroms = NULL,
   keep_temp_files = TRUE, generate_cluster_ordering = FALSE,
-  memory_limit_gb = NA_real_, num_threads = NA_integer_)
+  memory_limit_gb = NA_real_, num_threads = NA_integer_,
+  sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL,
+  conc_param = 0.01, density_smooth = NA_real_, x_max_cap = 3,
+  hypercube_size = 5, cluster_conc = 5,
+  winner_curse_correction = "auto", winner_curse_threshold = 3L,
+  winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L)
 }
 \arguments{
 \item{no.iters}{The number of iterations that the MCMC chain should be run for}
@@ -39,6 +44,30 @@ make_run_params(no.iters, no.iters.burn.in, mut.assignment.type,
 \item{memory_limit_gb}{Optional hard memory guard rail in GB. DPClust runs if feasible under this limit, otherwise errors before starting.}
 
 \item{num_threads}{Number of CPU threads for the Gibbs C++ core (OpenMP). If NA, use runtime default.}
+
+\item{sample.snvs.only}{Boolean whether to only sample from SNVs (Default: TRUE)}
+
+\item{remove.snvs}{Boolean whether to remove all SNVs (Default: FALSE)}
+
+\item{prefix}{Optional string to include in output filenames.}
+
+\item{conc_param}{Hyperparameter setting that affects the sampling of the alpha stick-breaking parameter.}
+
+\item{density_smooth}{Optional density smoothing override.}
+
+\item{x_max_cap}{Maximum cap for 1D plot x-axis scaling.}
+
+\item{hypercube_size}{Local optima search window for 1D clustering.}
+
+\item{cluster_conc}{Legacy parameter, no longer used.}
+
+\item{winner_curse_correction}{Winner's curse correction policy: "auto", TRUE, or FALSE (Default: "auto")}
+
+\item{winner_curse_threshold}{Minimum mutant reads assumed necessary for detection in the winner's curse model (Default: 3)}
+
+\item{winner_curse_mh_sd}{Proposal scale for winner's curse cluster-location Metropolis updates (Default: 0.12)}
+
+\item{winner_curse_mh_steps}{Number of Metropolis updates per occupied cluster/location update when winner's curse correction is enabled (Default: 8)}
 }
 \value{
 A list containing these components

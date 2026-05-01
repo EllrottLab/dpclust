@@ -2,7 +2,7 @@
 # DPClust core algorithm
 #
 
-subclone.dirichlet.gibbs <- function(mutCount, WTCount, totalCopyNumber = array(1, dim(mutCount)), normalCopyNumber = array(2, dim(mutCount)), copyNumberAdjustment = array(1, dim(mutCount)), C = 30, cellularity = rep(1, ncol(mutCount)), iter = 1000, conc_param = 1, cluster_conc = 10, keep_aux_fields = FALSE, num_threads = NA_integer_, stored_iters = integer(0), conflict.array = .init_conflicts()) {
+subclone.dirichlet.gibbs <- function(mutCount, WTCount, totalCopyNumber = array(1, dim(mutCount)), normalCopyNumber = array(2, dim(mutCount)), copyNumberAdjustment = array(1, dim(mutCount)), C = 30, cellularity = rep(1, ncol(mutCount)), iter = 1000, conc_param = 1, cluster_conc = 10, keep_aux_fields = FALSE, num_threads = NA_integer_, stored_iters = integer(0), conflict.array = .init_conflicts(), winner_curse_correction = TRUE, winner_curse_threshold = 3L, winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L) {
   if (is.null(copyNumberAdjustment)) {
     copyNumberAdjustment <- array(1, dim(mutCount))
   }
@@ -40,7 +40,13 @@ subclone.dirichlet.gibbs <- function(mutCount, WTCount, totalCopyNumber = array(
     log_info("OpenMP: NOT AVAILABLE in this build — running single-threaded (recompile with OpenMP support for parallelism)")
   }
 
-  res <- subclone_dirichlet_gibbs_cpp(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, cpp_threads, as.integer(stored_iters), as.integer(conflict.array$i), as.integer(conflict.array$j), as.numeric(conflict.array$w), log_info)
+  if (winner_curse_correction) {
+    log_info(paste("Winner's curse model: ENABLED with mutant-read detection threshold", winner_curse_threshold))
+  } else {
+    log_info("Winner's curse model: disabled")
+  }
+
+  res <- subclone_dirichlet_gibbs_cpp(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, cpp_threads, as.integer(stored_iters), winner_curse_correction, as.integer(winner_curse_threshold), winner_curse_mh_sd, as.integer(winner_curse_mh_steps), as.integer(conflict.array$i), as.integer(conflict.array$j), as.numeric(conflict.array$w), log_info)
   if (!keep_aux_fields) {
     # mutBurdens is large and not used by the current downstream pipeline.
     res$mutBurdens <- NULL

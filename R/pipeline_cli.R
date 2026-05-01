@@ -46,6 +46,10 @@ dpclust_cli <- function() {
     optparse::make_option(c("--hypercube_size"), type = "integer", default = 5, help = "Window size for peak detection [default: %default]", metavar = "integer"),
     optparse::make_option(c("--cluster_conc"), type = "numeric", default = 5, help = "Concentration parameter for cluster variance [default: %default]", metavar = "numeric"),
     optparse::make_option(c("--conc_param"), type = "numeric", default = 0.01, help = "Dirichlet process concentration parameter (alpha) [default: %default]", metavar = "numeric"),
+    optparse::make_option(c("--winner_curse_correction"), type = "character", default = "auto", help = "Winner's curse correction policy: auto, true, or false [default: %default]", metavar = "string"),
+    optparse::make_option(c("--winner_curse_threshold"), type = "integer", default = 3L, help = "Minimum mutant reads assumed necessary for mutation detection in the winner's curse model [default: %default]", metavar = "integer"),
+    optparse::make_option(c("--winner_curse_mh_sd"), type = "numeric", default = 0.12, help = "Proposal scale for winner's curse cluster-location Metropolis updates [default: %default]", metavar = "numeric"),
+    optparse::make_option(c("--winner_curse_mh_steps"), type = "integer", default = 8L, help = "Metropolis updates per occupied cluster/location when winner's curse correction is enabled [default: %default]", metavar = "integer"),
 
     # Advanced / Behavior
     optparse::make_option(c("--species"), type = "character", default = "human", help = "Species (e.g. human, mouse) [default: %default]", metavar = "string"),
@@ -200,7 +204,11 @@ dpclust_cli <- function() {
       x_max_cap = opt$x_max_cap,
       hypercube_size = opt$hypercube_size,
       cluster_conc = opt$cluster_conc,
-      conc_param = opt$conc_param
+      conc_param = opt$conc_param,
+      winner_curse_correction = opt$winner_curse_correction,
+      winner_curse_threshold = opt$winner_curse_threshold,
+      winner_curse_mh_sd = opt$winner_curse_mh_sd,
+      winner_curse_mh_steps = opt$winner_curse_mh_steps
     ),
     error = function(e) {
       run_status <<- "FAILED"
@@ -229,7 +237,11 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                  x_max_cap = 3,
                                  hypercube_size = 5,
                                  cluster_conc = 5,
-                                 conc_param = 0.01) {
+                                 conc_param = 0.01,
+                                 winner_curse_correction = "auto",
+                                 winner_curse_threshold = 3L,
+                                 winner_curse_mh_sd = 0.12,
+                                 winner_curse_mh_steps = 8L) {
   options(bitmapType = "cairo")
   options(rgl.useNULL = TRUE)
 
@@ -340,7 +352,11 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     x_max_cap = x_max_cap,
     hypercube_size = hypercube_size,
     cluster_conc = cluster_conc,
-    conc_param = conc_param
+    conc_param = conc_param,
+    winner_curse_correction = winner_curse_correction,
+    winner_curse_threshold = winner_curse_threshold,
+    winner_curse_mh_sd = winner_curse_mh_sd,
+    winner_curse_mh_steps = winner_curse_mh_steps
   )
 
   datpath <- if (is.null(data_path)) "" else data_path

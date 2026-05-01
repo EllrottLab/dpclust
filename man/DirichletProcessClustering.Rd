@@ -8,7 +8,12 @@ DirichletProcessClustering(mutCount, WTCount, totalCopyNumber,
   copyNumberAdjustment, mutation.copy.number, cellularity, output_folder,
   no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param,
   cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes,
-  max.considered.clusters)
+  max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE,
+  num_threads = NA_integer_, conflict.array = .init_conflicts(),
+  keep_temp_files = TRUE, density_smooth = NA_real_, x_max_cap = 3,
+  hypercube_size = 5, winner_curse_correction = TRUE,
+  winner_curse_threshold = 3L, winner_curse_mh_sd = 0.12,
+  winner_curse_mh_steps = 8L)
 }
 \arguments{
 \item{mutCount}{Matrix with readcounts of the mutated allele}
@@ -44,6 +49,30 @@ DirichletProcessClustering(mutCount, WTCount, totalCopyNumber,
 \item{mutationTypes}{Vector with mutation types, used for plotting}
 
 \item{max.considered.clusters}{Maximum number of clusters to consider}
+
+\item{thin_s_i}{Boolean whether to store a thinned assignment-state matrix.}
+
+\item{keep_aux_fields}{Boolean whether to keep large auxiliary Gibbs sampler fields.}
+
+\item{num_threads}{Number of CPU threads for the Gibbs C++ core (OpenMP). If NA, use runtime default.}
+
+\item{conflict.array}{Optional mutation conflict array used to penalize incompatible co-clustering.}
+
+\item{keep_temp_files}{Set to TRUE to keep temporary files.}
+
+\item{density_smooth}{Optional density smoothing override.}
+
+\item{x_max_cap}{Maximum cap for 1D plot x-axis scaling.}
+
+\item{hypercube_size}{Local optima search window for 1D clustering.}
+
+\item{winner_curse_correction}{Effective boolean passed by RunDP after winner's curse auto-detection.}
+
+\item{winner_curse_threshold}{Minimum mutant reads assumed necessary for detection in the winner's curse model (Default: 3)}
+
+\item{winner_curse_mh_sd}{Proposal scale for winner's curse cluster-location Metropolis updates (Default: 0.12)}
+
+\item{winner_curse_mh_steps}{Number of Metropolis updates per occupied cluster/location update when winner's curse correction is enabled (Default: 8)}
 }
 \description{
 Will perform clustering using the given data. The method

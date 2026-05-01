@@ -19,10 +19,20 @@
 #' @param num_threads Number of CPU threads for the Gibbs C++ core (OpenMP). If NA, use runtime default.
 #' @param sample.snvs.only Boolean whether to only sample from SNVs (Default: TRUE)
 #' @param remove.snvs Boolean whether to remove all SNVs (Default: FALSE)
+#' @param prefix Optional string to include in output filenames
+#' @param conc_param Hyperparameter setting that affects the sampling of the alpha stick-breaking parameter
+#' @param density_smooth Optional density smoothing override
+#' @param x_max_cap Maximum cap for 1D plot x-axis scaling
+#' @param hypercube_size Local optima search window for 1D clustering
+#' @param cluster_conc Legacy parameter, no longer used
+#' @param winner_curse_correction Winner's curse correction policy: "auto", TRUE, or FALSE (Default: "auto")
+#' @param winner_curse_threshold Minimum mutant reads assumed necessary for detection in the winner's curse model (Default: 3)
+#' @param winner_curse_mh_sd Proposal scale for winner's curse cluster-location Metropolis updates (Default: 0.12)
+#' @param winner_curse_mh_steps Number of Metropolis updates per occupied cluster/location update when winner's curse correction is enabled (Default: 8)
 #' @return A list containing these components
 #' @author sd11
 #' @export
-make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL, conc_param = 0.01, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5, cluster_conc = 5) {
+make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL, conc_param = 0.01, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5, cluster_conc = 5, winner_curse_correction = "auto", winner_curse_threshold = 3L, winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L) {
   if (is.null(supported_chroms)) {
     if (species == "human" | species == "Human") {
       # Set the expected chromosomes based on the sex
@@ -54,7 +64,11 @@ make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num
     density_smooth = density_smooth,
     x_max_cap = x_max_cap,
     hypercube_size = hypercube_size,
-    cluster_conc = cluster_conc
+    cluster_conc = cluster_conc,
+    winner_curse_correction = winner_curse_correction,
+    winner_curse_threshold = winner_curse_threshold,
+    winner_curse_mh_sd = winner_curse_mh_sd,
+    winner_curse_mh_steps = winner_curse_mh_steps
   ))
 }
 
@@ -122,6 +136,118 @@ make_cna_params <- function() {
   invisible(NULL)
 }
 
+.detect_winner_curse <- function(dataset, cellularity, policy = "auto", threshold = 3L) {
+  auto_thresholds <- list(
+    pct_expected_low = 10,
+    pct_expected_low_low_purity = 5,
+    pct_observed_low = 10,
+    low_purity = 0.30,
+    median_expected_alt_multiplier = 3
+  )
+
+  coerce_policy <- function(x) {
+    if (is.logical(x)) return(if (isTRUE(x)) "force_on" else "force_off")
+    x <- tolower(trimws(as.character(x)[1]))
+    if (x %in% c("auto", "detect", "detected")) return("auto")
+    if (x %in% c("true", "t", "yes", "y", "on", "1", "force_on", "force-on")) return("force_on")
+    if (x %in% c("false", "f", "no", "n", "off", "0", "force_off", "force-off")) return("force_off")
+    stop(sprintf("winner_curse_correction must be auto, true, or false. Got: %s", x), call. = FALSE)
+  }
+
+  required <- c("mutCount", "WTCount", "mutation.copy.number", "copyNumberAdjustment", "kappa")
+  policy <- coerce_policy(policy)
+  has_inputs <- all(vapply(required, function(field) !is.null(dataset[[field]]), logical(1)))
+  if (!has_inputs) {
+    return(list(
+      enabled = FALSE,
+      policy = policy,
+      reason = "auto: insufficient data to evaluate winner's curse risk",
+      metrics = NULL
+    ))
+  }
+
+  ccf <- dataset$mutation.copy.number / dataset$copyNumberAdjustment
+  expected_alt <- (dataset$mutCount + dataset$WTCount) * ccf * dataset$kappa
+  expected_alt[!is.finite(expected_alt)] <- NA
+
+  metrics <- lapply(seq_len(ncol(expected_alt)), function(i) {
+    finite <- is.finite(expected_alt[, i])
+    if (!any(finite)) return(NULL)
+    q <- stats::quantile(expected_alt[finite, i], probs = c(0.05, 0.50, 0.95), na.rm = TRUE, names = FALSE)
+    data.frame(
+      sample_index = i,
+      purity = cellularity[i],
+      q05 = q[1],
+      q50 = q[2],
+      q95 = q[3],
+      pct_expected_low = mean(expected_alt[finite, i] <= (2 * threshold), na.rm = TRUE) * 100,
+      pct_observed_low = mean(dataset$mutCount[finite, i] <= (2 * threshold), na.rm = TRUE) * 100,
+      pct_at_detection_threshold = mean(dataset$mutCount[finite, i] >= threshold, na.rm = TRUE) * 100
+    )
+  })
+  metrics <- Filter(Negate(is.null), metrics)
+  metrics <- if (length(metrics) == 0) NULL else do.call(rbind, metrics)
+
+  if (policy == "force_on") {
+    return(list(enabled = TRUE, policy = policy, reason = "forced on by winner_curse_correction", metrics = metrics))
+  }
+  if (policy == "force_off") {
+    return(list(enabled = FALSE, policy = policy, reason = "forced off by winner_curse_correction", metrics = metrics))
+  }
+  if (is.null(metrics)) {
+    return(list(enabled = FALSE, policy = policy, reason = "auto: insufficient data to evaluate winner's curse risk", metrics = NULL))
+  }
+
+  high_expected_low <- metrics$pct_expected_low >= auto_thresholds$pct_expected_low
+  low_median_support <- metrics$q50 <= (auto_thresholds$median_expected_alt_multiplier * threshold) &
+    metrics$pct_observed_low >= auto_thresholds$pct_observed_low
+  low_purity_sensitive <- metrics$purity <= auto_thresholds$low_purity &
+    metrics$pct_expected_low >= auto_thresholds$pct_expected_low_low_purity
+  enabled <- any(high_expected_low | low_median_support | low_purity_sensitive, na.rm = TRUE)
+  reason <- if (enabled) {
+    "auto: enabled because expected mutant-read support is near the detection boundary"
+  } else {
+    "auto: disabled because expected mutant-read support is sufficiently above the detection boundary"
+  }
+
+  list(enabled = enabled, policy = policy, reason = reason, metrics = metrics)
+}
+
+.log_winner_curse_model_assumptions <- function(policy, enabled, reason, threshold, mh_sd, mh_steps) {
+  log_info("Winner's curse model assumptions:")
+  log_info(sprintf("  policy                     : %s", policy))
+  log_info(sprintf("  effective enabled           : %s", enabled))
+  log_info(sprintf("  decision reason             : %s", reason))
+  log_info(sprintf("  detection threshold         : >= %d mutant reads", as.integer(threshold)))
+  log_info("  likelihood adjustment       : condition SNV/indel read-count likelihood on mutation being detectable")
+  log_info("  observation model           : binomial mutant reads with per-locus purity/copy-number/multiplicity scaling")
+  log_info("  diagnostic high-risk window : expected_alt_reads <= 2 * threshold")
+  log_info("  refit behavior              : cluster locations are sampled under the corrected likelihood, not post-hoc shifted")
+  if (enabled) {
+    log_info(sprintf("  cluster-location update     : Metropolis updates, proposal_sd=%.3f, steps=%d", mh_sd, as.integer(mh_steps)))
+  }
+}
+
+.log_winner_curse_diagnostics <- function(metrics, threshold = 3L, samplename = "") {
+  if (is.null(metrics) || nrow(metrics) == 0) {
+    return(invisible(NULL))
+  }
+  tag <- if (nzchar(samplename)) paste0(" (", samplename, ")") else ""
+
+  for (row_idx in seq_len(nrow(metrics))) {
+    row <- metrics[row_idx, ]
+    log_info(sprintf(
+      "Winner's curse diagnostics%s sample %d: purity=%.3f, expected_alt_reads q05=%.2f q50=%.2f q95=%.2f, %.1f%% expected <= %d reads, %.1f%% observed <= %d reads",
+      tag, row$sample_index, row$purity, row$q05, row$q50, row$q95, row$pct_expected_low, 2 * threshold, row$pct_observed_low, 2 * threshold
+    ))
+    log_info(sprintf(
+      "Winner's curse diagnostic interpretation%s sample %d: %.1f%% of mutations are in the high-risk expected-read window; %.1f%% have observed mutant reads >= detection threshold and receive the conditional-likelihood correction.",
+      tag, row$sample_index, row$pct_expected_low, row$pct_at_detection_threshold
+    ))
+  }
+  invisible(NULL)
+}
+
 #' Main DPClust function that handles the various pipelines
 #' @param analysis_type Type of analysis to run: nd_dp (1d and nd clustering), replot_1d/replot_nd (recreate plots), reassign_muts_1d/reassign_muts_nd (reassign mutations)
 #' @param run_params List with run parameters (see make_run_params)
@@ -150,6 +276,10 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
   x_max_cap <- if ("x_max_cap" %in% names(run_params)) run_params$x_max_cap else 3
   hypercube_size <- if ("hypercube_size" %in% names(run_params)) run_params$hypercube_size else 5
   cluster_conc <- if ("cluster_conc" %in% names(run_params)) run_params$cluster_conc else advanced_params$cluster_conc
+  winner_curse_correction <- if ("winner_curse_correction" %in% names(run_params)) run_params$winner_curse_correction else "auto"
+  winner_curse_threshold <- if ("winner_curse_threshold" %in% names(run_params)) run_params$winner_curse_threshold else 3L
+  winner_curse_mh_sd <- if ("winner_curse_mh_sd" %in% names(run_params)) run_params$winner_curse_mh_sd else 0.12
+  winner_curse_mh_steps <- if ("winner_curse_mh_steps" %in% names(run_params)) run_params$winner_curse_mh_steps else 8L
   conc_param <- if ("conc_param" %in% names(run_params)) run_params$conc_param else advanced_params$conc_param
   max.considered.clusters <- if ("max.considered.clusters" %in% names(advanced_params)) advanced_params$max.considered.clusters else 20
   species <- if ("species" %in% names(run_params) && !is.null(run_params$species)) run_params$species else "human"
@@ -337,6 +467,22 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
   }
   dataset$cndata <- cndata
   .log_clusterability_diagnostics(dataset, samplename = samplename)
+  winner_curse_decision <- .detect_winner_curse(
+    dataset = dataset,
+    cellularity = cellularity,
+    policy = winner_curse_correction,
+    threshold = winner_curse_threshold
+  )
+  winner_curse_correction_effective <- winner_curse_decision$enabled
+  .log_winner_curse_model_assumptions(
+    policy = winner_curse_decision$policy,
+    enabled = winner_curse_correction_effective,
+    reason = winner_curse_decision$reason,
+    threshold = winner_curse_threshold,
+    mh_sd = winner_curse_mh_sd,
+    mh_steps = winner_curse_mh_steps
+  )
+  .log_winner_curse_diagnostics(winner_curse_decision$metrics, threshold = winner_curse_threshold, samplename = samplename)
   # The dataset object was modified, so save it
   if (resave.dataset) {
     save(file = file.path(outdir, rdata_file_name), dataset)
@@ -387,7 +533,11 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       keep_temp_files = keep_temp_files,
       density_smooth = density_smooth,
       x_max_cap = x_max_cap,
-      hypercube_size = hypercube_size
+      hypercube_size = hypercube_size,
+      winner_curse_correction = winner_curse_correction_effective,
+      winner_curse_threshold = winner_curse_threshold,
+      winner_curse_mh_sd = winner_curse_mh_sd,
+      winner_curse_mh_steps = winner_curse_mh_steps
     )
     GS.data <- clustering$GS.data
   } else if (analysis_type == "replot_1d") {
@@ -986,8 +1136,20 @@ flatten_3d_to_2d <- function(data, col_names) {
 #' @param most.similar.mut Vector with most similar mutation for mutations removed during sampling (if any)
 #' @param mutationTypes Vector with mutation types, used for plotting
 #' @param max.considered.clusters Maximum number of clusters to consider
+#' @param thin_s_i Boolean whether to store a thinned assignment-state matrix
+#' @param keep_aux_fields Boolean whether to keep large auxiliary Gibbs sampler fields
+#' @param num_threads Number of CPU threads for the Gibbs C++ core (OpenMP). If NA, use runtime default
+#' @param conflict.array Optional mutation conflict array used to penalize incompatible co-clustering
+#' @param keep_temp_files Set to TRUE to keep temporary files
+#' @param density_smooth Optional density smoothing override
+#' @param x_max_cap Maximum cap for 1D plot x-axis scaling
+#' @param hypercube_size Local optima search window for 1D clustering
+#' @param winner_curse_correction Effective boolean passed by RunDP after winner's curse auto-detection.
+#' @param winner_curse_threshold Minimum mutant reads assumed necessary for detection in the winner's curse model (Default: 3)
+#' @param winner_curse_mh_sd Proposal scale for winner's curse cluster-location Metropolis updates (Default: 0.12)
+#' @param winner_curse_mh_steps Number of Metropolis updates per occupied cluster/location update when winner's curse correction is enabled (Default: 8)
 #' @author sd11
-DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_, conflict.array = .init_conflicts(), keep_temp_files = TRUE, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5) {
+DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyNumberAdjustment, mutation.copy.number, cellularity, output_folder, no.iters, no.iters.burn.in, subsamplesrun, samplename, conc_param, cluster_conc, mut.assignment.type, most.similar.mut, mutationTypes, max.considered.clusters, thin_s_i = FALSE, keep_aux_fields = FALSE, num_threads = NA_integer_, conflict.array = .init_conflicts(), keep_temp_files = TRUE, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5, winner_curse_correction = TRUE, winner_curse_threshold = 3L, winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L) {
   output_folder <- normalizePath(output_folder, mustWork = FALSE)
   if (!dir.exists(output_folder)) {
     dir.create(output_folder, recursive = TRUE, showWarnings = FALSE)
@@ -1018,7 +1180,11 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
     keep_aux_fields = keep_aux_fields,
     num_threads = num_threads,
     stored_iters = stored_iters,
-    conflict.array = conflict.array
+    conflict.array = conflict.array,
+    winner_curse_correction = winner_curse_correction,
+    winner_curse_threshold = winner_curse_threshold,
+    winner_curse_mh_sd = winner_curse_mh_sd,
+    winner_curse_mh_steps = winner_curse_mh_steps
   )
 
   if (keep_temp_files) {

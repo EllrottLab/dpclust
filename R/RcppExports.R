@@ -5,8 +5,8 @@ omp_thread_count_cpp <- function(requested = -1L) {
     .Call(`_DPClust_omp_thread_count_cpp`, requested)
 }
 
-subclone_dirichlet_gibbs_cpp <- function(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, conflict_i = as.integer( c()), conflict_j = as.integer( c()), conflict_w = as.numeric( c()), log_func = NULL) {
-    .Call(`_DPClust_subclone_dirichlet_gibbs_cpp`, mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, conflict_i, conflict_j, conflict_w, log_func)
+subclone_dirichlet_gibbs_cpp <- function(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, winner_curse_correction = TRUE, winner_curse_threshold = 3L, winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L, conflict_i = as.integer( c()), conflict_j = as.integer( c()), conflict_w = as.numeric( c()), log_func = NULL) {
+    .Call(`_DPClust_subclone_dirichlet_gibbs_cpp`, mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, winner_curse_correction, winner_curse_threshold, winner_curse_mh_sd, winner_curse_mh_steps, conflict_i, conflict_j, conflict_w, log_func)
 }
 
 assign_mutations_1d_cpp <- function(S_i, pi_h, boundary, sampledIters_pi, sampledIters_state, num_threads = -1L) {

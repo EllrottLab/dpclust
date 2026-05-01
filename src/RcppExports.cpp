@@ -22,8 +22,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // subclone_dirichlet_gibbs_cpp
-List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount, NumericMatrix totalCopyNumber, NumericMatrix normalCopyNumber, NumericMatrix copyNumberAdjustment, int C, NumericVector cellularity, int iter, double conc_param, double cluster_conc, bool keep_aux_fields, int num_threads, IntegerVector stored_iters, IntegerVector conflict_i, IntegerVector conflict_j, NumericVector conflict_w, Function log_func);
-RcppExport SEXP _DPClust_subclone_dirichlet_gibbs_cpp(SEXP mutCountSEXP, SEXP WTCountSEXP, SEXP totalCopyNumberSEXP, SEXP normalCopyNumberSEXP, SEXP copyNumberAdjustmentSEXP, SEXP CSEXP, SEXP cellularitySEXP, SEXP iterSEXP, SEXP conc_paramSEXP, SEXP cluster_concSEXP, SEXP keep_aux_fieldsSEXP, SEXP num_threadsSEXP, SEXP stored_itersSEXP, SEXP conflict_iSEXP, SEXP conflict_jSEXP, SEXP conflict_wSEXP, SEXP log_funcSEXP) {
+List subclone_dirichlet_gibbs_cpp(NumericMatrix mutCount, NumericMatrix WTCount, NumericMatrix totalCopyNumber, NumericMatrix normalCopyNumber, NumericMatrix copyNumberAdjustment, int C, NumericVector cellularity, int iter, double conc_param, double cluster_conc, bool keep_aux_fields, int num_threads, IntegerVector stored_iters, bool winner_curse_correction, int winner_curse_threshold, double winner_curse_mh_sd, int winner_curse_mh_steps, IntegerVector conflict_i, IntegerVector conflict_j, NumericVector conflict_w, Function log_func);
+RcppExport SEXP _DPClust_subclone_dirichlet_gibbs_cpp(SEXP mutCountSEXP, SEXP WTCountSEXP, SEXP totalCopyNumberSEXP, SEXP normalCopyNumberSEXP, SEXP copyNumberAdjustmentSEXP, SEXP CSEXP, SEXP cellularitySEXP, SEXP iterSEXP, SEXP conc_paramSEXP, SEXP cluster_concSEXP, SEXP keep_aux_fieldsSEXP, SEXP num_threadsSEXP, SEXP stored_itersSEXP, SEXP winner_curse_correctionSEXP, SEXP winner_curse_thresholdSEXP, SEXP winner_curse_mh_sdSEXP, SEXP winner_curse_mh_stepsSEXP, SEXP conflict_iSEXP, SEXP conflict_jSEXP, SEXP conflict_wSEXP, SEXP log_funcSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -40,11 +40,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type keep_aux_fields(keep_aux_fieldsSEXP);
     Rcpp::traits::input_parameter< int >::type num_threads(num_threadsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type stored_iters(stored_itersSEXP);
+    Rcpp::traits::input_parameter< bool >::type winner_curse_correction(winner_curse_correctionSEXP);
+    Rcpp::traits::input_parameter< int >::type winner_curse_threshold(winner_curse_thresholdSEXP);
+    Rcpp::traits::input_parameter< double >::type winner_curse_mh_sd(winner_curse_mh_sdSEXP);
+    Rcpp::traits::input_parameter< int >::type winner_curse_mh_steps(winner_curse_mh_stepsSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type conflict_i(conflict_iSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type conflict_j(conflict_jSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type conflict_w(conflict_wSEXP);
     Rcpp::traits::input_parameter< Function >::type log_func(log_funcSEXP);
-    rcpp_result_gen = Rcpp::wrap(subclone_dirichlet_gibbs_cpp(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, conflict_i, conflict_j, conflict_w, log_func));
+    rcpp_result_gen = Rcpp::wrap(subclone_dirichlet_gibbs_cpp(mutCount, WTCount, totalCopyNumber, normalCopyNumber, copyNumberAdjustment, C, cellularity, iter, conc_param, cluster_conc, keep_aux_fields, num_threads, stored_iters, winner_curse_correction, winner_curse_threshold, winner_curse_mh_sd, winner_curse_mh_steps, conflict_i, conflict_j, conflict_w, log_func));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -102,7 +106,7 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_DPClust_omp_thread_count_cpp", (DL_FUNC) &_DPClust_omp_thread_count_cpp, 1},
-    {"_DPClust_subclone_dirichlet_gibbs_cpp", (DL_FUNC) &_DPClust_subclone_dirichlet_gibbs_cpp, 17},
+    {"_DPClust_subclone_dirichlet_gibbs_cpp", (DL_FUNC) &_DPClust_subclone_dirichlet_gibbs_cpp, 21},
     {"_DPClust_assign_mutations_1d_cpp", (DL_FUNC) &_DPClust_assign_mutations_1d_cpp, 6},
     {"_DPClust_assign_mutations_nd_cpp", (DL_FUNC) &_DPClust_assign_mutations_nd_cpp, 10},
     {"_DPClust_get_snv_assignment_ccfs_cpp", (DL_FUNC) &_DPClust_get_snv_assignment_ccfs_cpp, 5},
