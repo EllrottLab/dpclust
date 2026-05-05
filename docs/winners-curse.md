@@ -32,6 +32,71 @@ mutant reads >= 3
 
 Cluster locations are then sampled under the corrected likelihood.
 
+## Implementation Checklist
+
+This section maps the implementation back to the original standalone winner's curse code.
+
+The original code had this slightly confusing threshold convention:
+
+```r
+wcc <- function(..., T, ...) {
+    T = T - 1
+    ...
+    for (j in 0:T) {
+        sp = sp + dbinom(j, rd, tbp)
+    }
+    sf = 1 / (1 - sp)
+}
+```
+
+With `T = 3`, that code subtracts one and sums the missed mutations with `0`, `1`, or `2` mutant reads. The correction is therefore conditioning on mutations having:
+
+```text
+mutant reads >= 3
+```
+
+DPClust implements the same threshold meaning in C++:
+
+| Original WCC behavior | DPClust implementation |
+|---|---|
+| `T = T - 1` means default `T = 3` corrects for missing `0`, `1`, and `2` mutant-read observations | `src/dpclust_rcpp.cpp:37-68` computes missed detection as `P(X < threshold)`; `src/dpclust_rcpp.cpp:53-55` is the optimized `threshold == 3` branch that sums `0`, `1`, and `2` mutant reads |
+| `sf = 1 / (1 - sp)` divides by detection probability | `src/dpclust_rcpp.cpp:75-79` subtracts `log_detection_prob_from_logq(...)`, which is the log-likelihood equivalent of dividing by detection probability |
+| The correction applies to observed mutations that pass the detection threshold | `src/dpclust_rcpp.cpp:225` sets `row.observed_at_detection_threshold = row.mut >= winner_curse_threshold`; `src/dpclust_rcpp.cpp:83-85` only applies the conditional likelihood for rows at or above that threshold |
+| The default detection threshold is `3` mutant reads | `R/DirichletProcessClustering.R:28-36` and `R/pipeline_cli.R:49-50` default `winner_curse_threshold = 3L` |
+
+This addresses the important `T - 1` concern from the original script: default `T = 3` still means missed observations are `0`, `1`, and `2` mutant reads, and detected observations are `>= 3` mutant reads.
+
+This is not a post-hoc shift of the final CCF table. The standalone script uses a separate one-dimensional Brent optimization after clusters have already been identified. DPClust instead samples cluster locations inside the Gibbs model under the conditional read-count likelihood. Therefore the corrected DPClust result should follow the same detection-threshold logic, but it is not expected to match the standalone script bit-for-bit or guarantee the exact same `1.0` cluster position in every case.
+
+## Why This Is Implemented Inside DPClust
+
+A post-hoc winner's curse script is useful for proving the effect, but it is a poor long-term place to apply the correction.
+
+The bias affects the read-count evidence that DPClust uses to decide where clusters are. If the correction is applied only after fitting, the clustering step has already seen biased evidence. That means the final table can be adjusted, but the cluster discovery, mutation assignment probabilities, density plots, and cluster labels may still reflect the uncorrected likelihood.
+
+Putting the correction inside the DPClust likelihood keeps the model internally consistent:
+
+| Pipeline step | Why model-level correction is better |
+|---|---|
+| Cluster location fitting | Cluster positions are sampled using the corrected evidence, rather than moved after the fact |
+| Mutation assignment | Assignment probabilities are calculated against the corrected cluster positions |
+| Plots | The plotted posterior density reflects the same model that produced the cluster table |
+| Outputs | Corrected cluster info, assignments, and QC plots come from one coherent fit |
+| Reproducibility | The correction is controlled by normal DPClust parameters and logged in the run, not by a separate script with separate assumptions |
+
+The tradeoff is that the corrected model is not a literal reproduction of the standalone script. The standalone script asks, "given an already chosen peak, where would this peak move after conditioning on detection?" DPClust asks, "where should the clusters be if detection bias is part of the observation model from the start?" The second question is the better software and statistical integration for routine pipeline use, even though the numbers are not guaranteed to be bit-for-bit identical to the standalone check.
+
+The before/after cluster outputs are written here:
+
+| Requested output | DPClust file |
+|---|---|
+| Uncorrected cluster positions | `*_winnerCurse_uncorrected_bestClusterInfo.txt` |
+| Corrected cluster positions | `*_winnerCurse_corrected_bestClusterInfo.txt` |
+| Side-by-side cluster position comparison | `*_winnerCurse_clusterComparison.txt` |
+| 1D before/after density and cluster-position plot | `SAMPLE_winnerCurse_before_after_1D.png` |
+
+The code that creates those files is in `R/DirichletProcessClustering.R`: `R/DirichletProcessClustering.R:677-711` runs the uncorrected comparator fit with `winner_curse_correction = FALSE`; `R/DirichletProcessClustering.R:717-747` runs the corrected fit with the effective winner's curse decision; `R/DirichletProcessClustering.R:332-346` defines `.write_winner_curse_cluster_info()`; `R/DirichletProcessClustering.R:748-762` writes the uncorrected and corrected `bestClusterInfo` tables; `R/DirichletProcessClustering.R:297-329` writes the side-by-side comparison table; and `R/DirichletProcessClustering.R:769-777` writes the 1D before/after plot.
+
 ## Auto-Detection Criteria
 
 DPClust computes expected mutant reads per mutation using the loaded read counts, purity, copy-number scaling, and multiplicity adjustment.
@@ -128,9 +193,11 @@ which overlays the uncorrected and corrected density curves and cluster location
 
 ```text
 *_winnerCurse_clusterComparison.txt
+*_winnerCurse_uncorrected_bestClusterInfo.txt
+*_winnerCurse_corrected_bestClusterInfo.txt
 ```
 
-which compares cluster positions before and after the winner's curse-aware fit by cluster rank.
+These files record the before/after cluster positions directly. The comparison table aligns cluster positions before and after the winner's curse-aware fit by cluster rank.
 
 The detection threshold can also be changed:
 

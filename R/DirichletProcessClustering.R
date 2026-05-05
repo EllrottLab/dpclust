@@ -329,6 +329,23 @@ make_cna_params <- function() {
   )
 }
 
+.write_winner_curse_cluster_info <- function(clustering, outfiles.prefix, samplename, subsamples, label) {
+  outfile <- paste0(outfiles.prefix, "_winnerCurse_", label, "_bestClusterInfo.txt")
+  if (ncol(clustering$cluster.locations) > 3) {
+    colnames <- c("cluster.no", paste(samplename, subsamples, sep = ""), "no.of.mutations")
+  } else {
+    colnames <- c("cluster.no", "location", "no.of.mutations")
+  }
+  write.table(
+    clustering$cluster.locations,
+    outfile,
+    col.names = colnames,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+}
+
 .plot_winner_curse_1d_comparison <- function(dataset, samplename, uncorrected, corrected, outdir, x_max_cap = 3) {
   if (is.null(uncorrected$density) || is.null(corrected$density)) return(invisible(NULL))
 
@@ -729,6 +746,20 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       winner_curse_mh_steps = winner_curse_mh_steps
     )
     if (!is.null(winner_curse_uncorrected_clustering)) {
+      .write_winner_curse_cluster_info(
+        clustering = winner_curse_uncorrected_clustering,
+        outfiles.prefix = outfiles.prefix,
+        samplename = samplename,
+        subsamples = subsamples,
+        label = "uncorrected"
+      )
+      .write_winner_curse_cluster_info(
+        clustering = clustering,
+        outfiles.prefix = outfiles.prefix,
+        samplename = samplename,
+        subsamples = subsamples,
+        label = "corrected"
+      )
       .write_winner_curse_cluster_comparison(
         uncorrected = winner_curse_uncorrected_clustering,
         corrected = clustering,
