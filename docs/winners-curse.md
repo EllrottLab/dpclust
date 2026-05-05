@@ -11,6 +11,7 @@ By default, DPClust uses:
 ```text
 winner_curse_correction = auto
 winner_curse_threshold = 3
+winner_curse_compare_plots = true
 ```
 
 In `auto` mode, DPClust first evaluates each loaded sample for low expected mutant-read support. If the sample appears vulnerable to winner's curse bias, DPClust enables a corrected likelihood in the Gibbs sampler.
@@ -96,6 +97,41 @@ For validation or comparison, the behavior can be forced:
 --winner_curse_correction false
 ```
 
+For transparent QC, DPClust runs an uncorrected comparator fit and writes before/after outputs by default when correction is effectively enabled:
+
+```text
+--winner_curse_compare_plots true
+```
+
+This does not replace the primary output. The primary output still follows `--winner_curse_correction` (`auto`, `true`, or `false`). When comparison plots are enabled and correction is effectively enabled, DPClust first runs an uncorrected comparator, preserves those plots with a `winnerCurse_uncorrected` filename tag, then runs the corrected fit normally.
+
+For a uniform correction/reporting pass across all samples, use:
+
+```text
+--winner_curse_correction true
+--winner_curse_compare_plots true
+```
+
+To suppress the extra comparator run:
+
+```text
+--winner_curse_compare_plots false
+```
+
+For one-dimensional runs, this also writes:
+
+```text
+SAMPLE_winnerCurse_before_after_1D.png
+```
+
+which overlays the uncorrected and corrected density curves and cluster locations. All runs with comparison enabled write:
+
+```text
+*_winnerCurse_clusterComparison.txt
+```
+
+which compares cluster positions before and after the winner's curse-aware fit by cluster rank.
+
 The detection threshold can also be changed:
 
 ```text
@@ -125,6 +161,6 @@ Then compare against a longer run if the cluster locations or plots are unstable
 
 ## Interpretation
 
-When correction is enabled, the primary cluster outputs and plots already reflect the winner's curse-aware fit. There is no separate post-hoc corrected cluster table.
+When correction is enabled, the primary cluster outputs and plots already reflect the winner's curse-aware fit. There is no separate post-hoc corrected cluster table unless `--winner_curse_compare_plots true` is enabled, in which case the extra files are QC comparison artifacts from an additional uncorrected fit.
 
 If `effective enabled` is `FALSE`, DPClust uses the ordinary likelihood because the sample did not appear to need the correction under the auto-detection criteria, or because correction was forced off.

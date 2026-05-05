@@ -14,7 +14,8 @@ make_run_params(no.iters, no.iters.burn.in, mut.assignment.type,
   conc_param = 0.01, density_smooth = NA_real_, x_max_cap = 3,
   hypercube_size = 5, cluster_conc = 5,
   winner_curse_correction = "auto", winner_curse_threshold = 3L,
-  winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L)
+  winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L,
+  winner_curse_compare_plots = TRUE)
 }
 \arguments{
 \item{no.iters}{The number of iterations that the MCMC chain should be run for}
@@ -68,6 +69,8 @@ make_run_params(no.iters, no.iters.burn.in, mut.assignment.type,
 \item{winner_curse_mh_sd}{Proposal scale for winner's curse cluster-location Metropolis updates (Default: 0.12)}
 
 \item{winner_curse_mh_steps}{Number of Metropolis updates per occupied cluster/location update when winner's curse correction is enabled (Default: 8)}
+
+\item{winner_curse_compare_plots}{Run an additional uncorrected comparator fit and write winner's curse before/after QC outputs (Default: TRUE)}
 }
 \value{
 A list containing these components

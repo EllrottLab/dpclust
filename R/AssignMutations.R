@@ -82,13 +82,8 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
     localOptima <- localOptima[not.is.empty]
     no.optima <- length(localOptima)
 
-    # Save the cluster assignment probabilities table
-    most.likely.cluster <- max.col(mutation.preferences)
-    out <- cbind(mutation.preferences, most.likely.cluster)
-    colnames(out)[(ncol(out) - no.optima):ncol(out)] <- c(paste("prob.cluster", 1:ncol(mutation.preferences), sep = ""), "most.likely.cluster")
-    fwrite(as.data.frame(out), file.path(outdir, paste0(samplename, "_DP_and_cluster_info.txt")), sep = "\t", row.names = FALSE, quote = FALSE, na = "NA")
-
     # Assemble a table with mutation assignments to each cluster
+    most.likely.cluster <- max.col(mutation.preferences)
     cluster_assignment_counts <- sapply(1:ncol(mutation.preferences), function(x, m) {
       sum(m == x)
     }, m = most.likely.cluster) # table(most.likely.cluster)
@@ -117,6 +112,10 @@ oneDimensionalClustering <- function(samplename, subclonal.fraction, GS.data, de
 
     # Obtain likelyhood of most likely cluster assignments
     most.likely.cluster.likelihood <- mutation.preferences[cbind(1:no.muts, most.likely.cluster)]
+
+    out <- cbind(mutation.preferences, most.likely.cluster)
+    colnames(out)[(ncol(out) - ncol(mutation.preferences)):ncol(out)] <- c(paste("prob.cluster", seq_len(ncol(mutation.preferences)), sep = ""), "most.likely.cluster")
+    fwrite(as.data.frame(out), file.path(outdir, paste0(samplename, "_DP_and_cluster_info.txt")), sep = "\t", row.names = FALSE, quote = FALSE, na = "NA")
   } else {
     warning("No local optima found when assigning mutations to clusters")
     most.likely.cluster <- rep(1, no.muts)
@@ -629,11 +628,6 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
 
     CIs <- array(quantiles[, , c(1, 3)], c(no.optima, no.subsamples * 2))
     CIs <- CIs[, rep(1:no.subsamples, each = 2) + rep(c(0, no.subsamples), no.subsamples)]
-    # out = cbind(data[[1]][,1:2],mutation.preferences,most.likely.cluster)
-    # names(out)[(ncol(out)-no.optima):ncol(out)] = c(paste("prob.cluster",1:no.optima,sep=""),"most.likely.cluster")
-    out <- cbind(mutation.preferences, most.likely.cluster)
-    names(out) <- c(paste("prob.cluster", 1:no.optima, sep = ""), "most.likely.cluster")
-
     cluster.locations <- cbind(1:ncol(mutation.preferences), quantiles[, , 2], colSums(mutation.preferences), table(factor(most.likely.cluster, levels = 1:no.optima)))
     write.table(cluster.locations,
       paste(new_output_folder, "/", samplename, "_optimaInfo_", density.smooth, ".txt", sep = ""),
@@ -643,7 +637,6 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
       quote = FALSE
     )
 
-    write.table(out, paste(new_output_folder, "/", samplename, "_DP_and_cluster_info_", density.smooth, ".txt", sep = ""), sep = "\t", row.names = FALSE, quote = FALSE, na = "NA")
     write.table(CIs, paste(new_output_folder, "/", samplename, "_confInts_", density.smooth, ".txt", sep = ""), col.names = paste(rep(paste(samplename, subsamples, sep = ""), each = 2), rep(c(".lower.CI", ".upper.CI"), no.subsamples), sep = ""), row.names = FALSE, sep = "\t", quote = FALSE)
   } else {
     most.likely.cluster <- rep(1, no.muts)
@@ -676,6 +669,10 @@ multiDimensionalClustering <- function(mutation.copy.number, copyNumberAdjustmen
 
   # Obtain likelyhood of most likely cluster assignments
   assignment.likelihood <- mutation.preferences[cbind(1:no.muts, most.likely.cluster)]
+
+  out <- cbind(mutation.preferences, most.likely.cluster)
+  names(out) <- c(paste("prob.cluster", seq_len(ncol(mutation.preferences)), sep = ""), "most.likely.cluster")
+  write.table(out, paste(new_output_folder, "/", samplename, "_DP_and_cluster_info_", density.smooth, ".txt", sep = ""), sep = "\t", row.names = FALSE, quote = FALSE, na = "NA")
 
   no.optima <- if (is.null(cluster.locations)) 0 else nrow(cluster.locations)
   subsamples <- opts$subsamplenames

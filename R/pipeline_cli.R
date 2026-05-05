@@ -50,6 +50,7 @@ dpclust_cli <- function() {
     optparse::make_option(c("--winner_curse_threshold"), type = "integer", default = 3L, help = "Minimum mutant reads assumed necessary for mutation detection in the winner's curse model [default: %default]", metavar = "integer"),
     optparse::make_option(c("--winner_curse_mh_sd"), type = "numeric", default = 0.12, help = "Proposal scale for winner's curse cluster-location Metropolis updates [default: %default]", metavar = "numeric"),
     optparse::make_option(c("--winner_curse_mh_steps"), type = "integer", default = 8L, help = "Metropolis updates per occupied cluster/location when winner's curse correction is enabled [default: %default]", metavar = "integer"),
+    optparse::make_option(c("--winner_curse_compare_plots"), type = "logical", default = TRUE, help = "Run an additional uncorrected comparator fit and write winner's curse before/after QC plots/tables [default: %default]", metavar = "boolean"),
 
     # Advanced / Behavior
     optparse::make_option(c("--species"), type = "character", default = "human", help = "Species (e.g. human, mouse) [default: %default]", metavar = "string"),
@@ -208,7 +209,8 @@ dpclust_cli <- function() {
       winner_curse_correction = opt$winner_curse_correction,
       winner_curse_threshold = opt$winner_curse_threshold,
       winner_curse_mh_sd = opt$winner_curse_mh_sd,
-      winner_curse_mh_steps = opt$winner_curse_mh_steps
+      winner_curse_mh_steps = opt$winner_curse_mh_steps,
+      winner_curse_compare_plots = opt$winner_curse_compare_plots
     ),
     error = function(e) {
       run_status <<- "FAILED"
@@ -241,7 +243,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                  winner_curse_correction = "auto",
                                  winner_curse_threshold = 3L,
                                  winner_curse_mh_sd = 0.12,
-                                 winner_curse_mh_steps = 8L) {
+                                 winner_curse_mh_steps = 8L,
+                                 winner_curse_compare_plots = TRUE) {
   options(bitmapType = "cairo")
   options(rgl.useNULL = TRUE)
 
@@ -356,7 +359,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     winner_curse_correction = winner_curse_correction,
     winner_curse_threshold = winner_curse_threshold,
     winner_curse_mh_sd = winner_curse_mh_sd,
-    winner_curse_mh_steps = winner_curse_mh_steps
+    winner_curse_mh_steps = winner_curse_mh_steps,
+    winner_curse_compare_plots = winner_curse_compare_plots
   )
 
   datpath <- if (is.null(data_path)) "" else data_path
@@ -385,6 +389,7 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
     seed, assign_sampled_muts, keep_temp_files,
     min_muts_cluster, min_frac_muts_cluster,
     density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param,
+    winner_curse_correction, winner_curse_threshold, winner_curse_compare_plots,
     data_path = datpath, datafiles = datafiles
   )
 
@@ -451,6 +456,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
                                       seed, assign_sampled_muts, keep_temp_files,
                                       min_muts_cluster, min_frac_muts_cluster,
                                       density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param,
+                                      winner_curse_correction = "auto", winner_curse_threshold = 3L,
+                                      winner_curse_compare_plots = TRUE,
                                       data_path = NULL, datafiles = NULL) {
   # Standardized prefix delimiter (double underscore) to keep consistency with dpclust3p patterns
   prefix_delim <- if (!is.null(prefix) && nchar(prefix) > 0) paste0("__", prefix, "__") else "__"
@@ -481,7 +488,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
       "iterations", "burnin", "mut_assignment_type", "num_muts_sample", "seed",
       "assign_sampled_muts", "keep_temp_files", "min_muts_cluster",
       "min_frac_muts_cluster", "prefix", "input_loci_count",
-      "density_smooth", "x_max_cap", "hypercube_size", "cluster_conc", "conc_param"
+      "density_smooth", "x_max_cap", "hypercube_size", "cluster_conc", "conc_param",
+      "winner_curse_correction", "winner_curse_threshold", "winner_curse_compare_plots"
     ),
     value = c(
       as.character(Sys.time()), as.character(packageVersion("DPClust")), samplename,
@@ -489,7 +497,8 @@ run_dpclust_pipeline <- function(run_sample, data_path, outputdir = getwd(), inp
       num_muts_sample, seed, assign_sampled_muts, keep_temp_files,
       min_muts_cluster, min_frac_muts_cluster, if (is.null(prefix)) "NA" else prefix,
       input_loci_count,
-      density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param
+      density_smooth, x_max_cap, hypercube_size, cluster_conc, conc_param,
+      winner_curse_correction, winner_curse_threshold, winner_curse_compare_plots
     ),
     stringsAsFactors = FALSE
   )

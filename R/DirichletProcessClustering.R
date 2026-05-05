@@ -29,10 +29,11 @@
 #' @param winner_curse_threshold Minimum mutant reads assumed necessary for detection in the winner's curse model (Default: 3)
 #' @param winner_curse_mh_sd Proposal scale for winner's curse cluster-location Metropolis updates (Default: 0.12)
 #' @param winner_curse_mh_steps Number of Metropolis updates per occupied cluster/location update when winner's curse correction is enabled (Default: 8)
+#' @param winner_curse_compare_plots Run an additional uncorrected comparator fit and write winner's curse before/after QC outputs (Default: TRUE)
 #' @return A list containing these components
 #' @author sd11
 #' @export
-make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL, conc_param = 0.01, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5, cluster_conc = 5, winner_curse_correction = "auto", winner_curse_threshold = 3L, winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L) {
+make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num_muts_sample, is.male, min_muts_cluster = NULL, min_frac_muts_cluster = 0.01, species = "human", assign_sampled_muts = TRUE, supported_chroms = NULL, keep_temp_files = TRUE, generate_cluster_ordering = FALSE, memory_limit_gb = NA_real_, num_threads = NA_integer_, sample.snvs.only = TRUE, remove.snvs = FALSE, prefix = NULL, conc_param = 0.01, density_smooth = NA_real_, x_max_cap = 3, hypercube_size = 5, cluster_conc = 5, winner_curse_correction = "auto", winner_curse_threshold = 3L, winner_curse_mh_sd = 0.12, winner_curse_mh_steps = 8L, winner_curse_compare_plots = TRUE) {
   if (is.null(supported_chroms)) {
     if (species == "human" | species == "Human") {
       # Set the expected chromosomes based on the sex
@@ -68,7 +69,8 @@ make_run_params <- function(no.iters, no.iters.burn.in, mut.assignment.type, num
     winner_curse_correction = winner_curse_correction,
     winner_curse_threshold = winner_curse_threshold,
     winner_curse_mh_sd = winner_curse_mh_sd,
-    winner_curse_mh_steps = winner_curse_mh_steps
+    winner_curse_mh_steps = winner_curse_mh_steps,
+    winner_curse_compare_plots = winner_curse_compare_plots
   ))
 }
 
@@ -248,6 +250,152 @@ make_cna_params <- function() {
   invisible(NULL)
 }
 
+.preserve_winner_curse_comparison_files <- function(outdir, samplename, label) {
+  files <- c(
+    paste0(samplename, "_DirichletProcessplot.png"),
+    paste0(samplename, "_DirichletProcessplotdensity.txt"),
+    paste0(samplename, "_DirichletProcessplotpolygonData.txt"),
+    paste0(samplename, "_DirichletProcessplot_with_cluster_locations.png"),
+    paste0(samplename, "_DirichletProcessplot_with_cluster_locations_2.png"),
+    paste0(samplename, "_DP_and_cluster_info.txt"),
+    paste0(samplename, "_localOptima.txt"),
+    paste0(samplename, "_optimaInfo.txt")
+  )
+  nd_files <- list.files(
+    outdir,
+    pattern = paste0("^", samplename, ".*(_2D_binomial|densityoutput|densityData|_xvals|_yvals|_zvals).*"),
+    full.names = FALSE
+  )
+  files <- unique(c(files, nd_files))
+
+  for (filename in files) {
+    src <- file.path(outdir, filename)
+    if (file.exists(src)) {
+      sample_prefix <- paste0(samplename, "_")
+      renamed <- if (substr(filename, 1, nchar(sample_prefix)) == sample_prefix) {
+        sub(paste0("^", samplename, "_"), paste0(samplename, "_", label, "_"), filename)
+      } else {
+        paste0(samplename, "_", label, "_", substring(filename, nchar(samplename) + 1))
+      }
+      dst <- file.path(outdir, renamed)
+      file.rename(src, dst)
+    }
+  }
+}
+
+.winner_curse_cluster_table <- function(clustering, tag, subsamples) {
+  locs <- as.data.frame(clustering$cluster.locations, stringsAsFactors = FALSE)
+  nloc <- max(1, ncol(locs) - 2)
+  loc_cols <- paste0(tag, "_", if (nloc == 1) "location" else subsamples[seq_len(nloc)])
+  out <- data.frame(rank = seq_len(nrow(locs)), stringsAsFactors = FALSE)
+  out[[paste0(tag, "_cluster.no")]] <- locs[, 1]
+  out[loc_cols] <- locs[, 2:(nloc + 1), drop = FALSE]
+  out[[paste0(tag, "_no.of.mutations")]] <- locs[, ncol(locs)]
+  out
+}
+
+.write_winner_curse_cluster_comparison <- function(uncorrected, corrected, outfiles.prefix, subsamples) {
+  before <- .winner_curse_cluster_table(uncorrected, "uncorrected", subsamples)
+  after <- .winner_curse_cluster_table(corrected, "corrected", subsamples)
+  n <- max(nrow(before), nrow(after))
+  pad_rows <- function(x, n) {
+    if (nrow(x) >= n) return(x)
+    empty <- x[rep(NA_integer_, n - nrow(x)), , drop = FALSE]
+    rownames(empty) <- NULL
+    rbind(x, empty)
+  }
+  before <- pad_rows(before, n)
+  after <- pad_rows(after, n)
+  before$rank <- after$rank <- seq_len(n)
+
+  comparison <- merge(before, after, by = "rank", all = TRUE, sort = TRUE)
+  before_locs <- grep("^uncorrected_.*(location|[[:alnum:]_.-]+)$", names(comparison), value = TRUE)
+  before_locs <- setdiff(before_locs, c("uncorrected_cluster.no", "uncorrected_no.of.mutations"))
+  after_locs <- sub("^uncorrected_", "corrected_", before_locs)
+  after_locs <- after_locs[after_locs %in% names(comparison)]
+  before_locs <- sub("^corrected_", "uncorrected_", after_locs)
+
+  for (i in seq_along(before_locs)) {
+    suffix <- sub("^uncorrected_", "", before_locs[i])
+    comparison[[paste0("delta_", suffix)]] <- comparison[[after_locs[i]]] - comparison[[before_locs[i]]]
+  }
+
+  write.table(
+    comparison,
+    file = paste0(outfiles.prefix, "_winnerCurse_clusterComparison.txt"),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+}
+
+.plot_winner_curse_1d_comparison <- function(dataset, samplename, uncorrected, corrected, outdir, x_max_cap = 3) {
+  if (is.null(uncorrected$density) || is.null(corrected$density)) return(invisible(NULL))
+
+  raw_ccf <- as.numeric(dataset$mutation.copy.number / dataset$copyNumberAdjustment)
+  raw_ccf <- raw_ccf[is.finite(raw_ccf)]
+  if (length(raw_ccf) == 0) return(invisible(NULL))
+
+  x.max <- ceiling(max(raw_ccf, uncorrected$density[, 1], corrected$density[, 1], na.rm = TRUE) * 12) / 10
+  if (!is.na(x_max_cap) && is.finite(x_max_cap)) x.max <- min(x.max, x_max_cap)
+  x.max <- max(1.5, x.max)
+
+  prep_density <- function(density) {
+    out <- as.data.frame(density, stringsAsFactors = FALSE)
+    out <- out[is.finite(out[, 1]) & is.finite(out[, 2]) & out[, 1] <= x.max, , drop = FALSE]
+    if (nrow(out) == 0 || sum(out[, 2], na.rm = TRUE) <= 0) return(NULL)
+    out[, 2] <- out[, 2] / sum(out[, 2], na.rm = TRUE)
+    out
+  }
+
+  uncorrected_density <- prep_density(uncorrected$density)
+  corrected_density <- prep_density(corrected$density)
+  if (is.null(uncorrected_density) || is.null(corrected_density)) return(invisible(NULL))
+
+  hist_data <- hist(raw_ccf[raw_ccf <= x.max], breaks = seq(-0.1, x.max, 0.025), plot = FALSE)
+  if (sum(hist_data$counts) == 0) return(invisible(NULL))
+  hist_y <- hist_data$counts / sum(hist_data$counts)
+  y.max <- 1.10 * max(hist_y, uncorrected_density[, 2], corrected_density[, 2], na.rm = TRUE)
+
+  outfile <- file.path(outdir, paste0(samplename, "_winnerCurse_before_after_1D.png"))
+  png(filename = outfile, width = 1500, height = 1000)
+  par(mar = c(5, 6, 4, 2) + 0.1)
+  plot(NA,
+    xlim = c(0, x.max),
+    ylim = c(0, y.max),
+    xlab = "Fraction of Tumour Cells",
+    ylab = "Relative density",
+    main = samplename,
+    cex.axis = 1.8,
+    cex.lab = 2
+  )
+  rect(hist_data$breaks[-length(hist_data$breaks)], 0, hist_data$breaks[-1], hist_y, col = "grey85", border = "white")
+  lines(uncorrected_density[, 1], uncorrected_density[, 2], col = "grey25", lwd = 4, lty = 2)
+  lines(corrected_density[, 1], corrected_density[, 2], col = "plum4", lwd = 4)
+
+  usr <- par("usr")
+  draw_clusters <- function(clustering, col, lty) {
+    locs <- clustering$cluster.locations[, 2]
+    locs <- locs[is.finite(locs) & locs <= x.max]
+    if (length(locs) > 0) {
+      abline(v = locs, col = col, lty = lty, lwd = 2)
+    }
+  }
+  draw_clusters(uncorrected, "grey25", 2)
+  draw_clusters(corrected, "plum4", 1)
+  legend("topright",
+    legend = c("Uncorrected density", "Corrected density"),
+    col = c("grey25", "plum4"),
+    lty = c(2, 1),
+    lwd = c(4, 4),
+    bty = "n",
+    cex = 1.5
+  )
+  par(usr = usr)
+  dev.off()
+  invisible(outfile)
+}
+
 #' Main DPClust function that handles the various pipelines
 #' @param analysis_type Type of analysis to run: nd_dp (1d and nd clustering), replot_1d/replot_nd (recreate plots), reassign_muts_1d/reassign_muts_nd (reassign mutations)
 #' @param run_params List with run parameters (see make_run_params)
@@ -280,6 +428,7 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
   winner_curse_threshold <- if ("winner_curse_threshold" %in% names(run_params)) run_params$winner_curse_threshold else 3L
   winner_curse_mh_sd <- if ("winner_curse_mh_sd" %in% names(run_params)) run_params$winner_curse_mh_sd else 0.12
   winner_curse_mh_steps <- if ("winner_curse_mh_steps" %in% names(run_params)) run_params$winner_curse_mh_steps else 8L
+  winner_curse_compare_plots <- if ("winner_curse_compare_plots" %in% names(run_params)) isTRUE(run_params$winner_curse_compare_plots) else TRUE
   conc_param <- if ("conc_param" %in% names(run_params)) run_params$conc_param else advanced_params$conc_param
   max.considered.clusters <- if ("max.considered.clusters" %in% names(advanced_params)) advanced_params$max.considered.clusters else 20
   species <- if ("species" %in% names(run_params) && !is.null(run_params$species)) run_params$species else "human"
@@ -508,6 +657,46 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
     ##############################
     # nD DP clustering
     ##############################
+    winner_curse_uncorrected_clustering <- NULL
+    if (winner_curse_compare_plots && winner_curse_correction_effective) {
+      log_info("Winner's curse comparison: running uncorrected comparator fit for before/after QC outputs...")
+      winner_curse_uncorrected_clustering <- DirichletProcessClustering(
+        mutCount = dataset$mutCount,
+        WTCount = dataset$WTCount,
+        no.iters = no.iters,
+        no.iters.burn.in = no.iters.burn.in,
+        cellularity = cellularity,
+        totalCopyNumber = dataset$totalCopyNumber,
+        mutation.copy.number = dataset$mutation.copy.number,
+        copyNumberAdjustment = dataset$copyNumberAdjustment,
+        mutationTypes = dataset$mutationType,
+        samplename = samplename,
+        subsamplesrun = subsamples,
+        output_folder = outdir,
+        conc_param = conc_param,
+        cluster_conc = cluster_conc,
+        mut.assignment.type = mut.assignment.type,
+        most.similar.mut = most.similar.mut,
+        max.considered.clusters = max.considered.clusters,
+        thin_s_i = thin_s_i,
+        keep_aux_fields = keep_aux_fields,
+        num_threads = num_threads,
+        conflict.array = dataset$conflict.array,
+        keep_temp_files = FALSE,
+        density_smooth = density_smooth,
+        x_max_cap = x_max_cap,
+        hypercube_size = hypercube_size,
+        winner_curse_correction = FALSE,
+        winner_curse_threshold = winner_curse_threshold,
+        winner_curse_mh_sd = winner_curse_mh_sd,
+        winner_curse_mh_steps = winner_curse_mh_steps
+      )
+      .preserve_winner_curse_comparison_files(outdir, samplename, "winnerCurse_uncorrected")
+      set.seed(seed)
+    } else if (winner_curse_compare_plots) {
+      log_info("Winner's curse comparison: skipped because the effective correction is disabled for this run.")
+    }
+
     clustering <- DirichletProcessClustering(
       mutCount = dataset$mutCount,
       WTCount = dataset$WTCount,
@@ -539,6 +728,25 @@ RunDP <- function(analysis_type, run_params, sample_params, advanced_params, out
       winner_curse_mh_sd = winner_curse_mh_sd,
       winner_curse_mh_steps = winner_curse_mh_steps
     )
+    if (!is.null(winner_curse_uncorrected_clustering)) {
+      .write_winner_curse_cluster_comparison(
+        uncorrected = winner_curse_uncorrected_clustering,
+        corrected = clustering,
+        outfiles.prefix = outfiles.prefix,
+        subsamples = subsamples
+      )
+      if (ncol(dataset$mutCount) == 1) {
+        .plot_winner_curse_1d_comparison(
+          dataset = dataset,
+          samplename = samplename,
+          uncorrected = winner_curse_uncorrected_clustering,
+          corrected = clustering,
+          outdir = outdir,
+          x_max_cap = x_max_cap
+        )
+      }
+      log_info("Winner's curse comparison: wrote uncorrected before/after QC outputs.")
+    }
     GS.data <- clustering$GS.data
   } else if (analysis_type == "replot_1d") {
     log_info("Running Remaking plots...")
@@ -1243,6 +1451,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       stop(paste("Unknown mutation assignment type", mut.assignment.type, sep = " "))
     }
     consClustering$GS.data <- GS.data
+    consClustering$density <- density
     return(consClustering)
 
     # 1D dataset, plot just the single density
@@ -1333,6 +1542,8 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
     )
 
     consClustering$GS.data <- GS.data
+    consClustering$density <- density
+    consClustering$polygon.data <- polygon.data
     return(consClustering)
   }
 }
