@@ -944,7 +944,9 @@ get_mutation_preferences <- function(GS.data, density, mut_assignments, clusteri
         iter_states <- S.i[s_state, ]
         unique_clusters <- unique(iter_states)
         # Vectorized mapping for all mutations in this iteration
-        optima_indices <- vapply(unique_clusters, function(c) sum(pi.h[s_pi, c, t] > boundary) + 1, integer(1))
+        optima_indices <- vapply(unique_clusters, function(c) {
+          as.integer(sum(pi.h[s_pi, c, t] > boundary)) + 1L
+        }, integer(1))
         map_optima <- localOptima[optima_indices]
         assign_ccfs[iter_idx, , t] <- map_optima[match(iter_states, unique_clusters)]
       }
