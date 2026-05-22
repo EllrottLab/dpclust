@@ -1116,7 +1116,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       post.burn.in.stop = no.iters,
       y.max = 15,
       x.max = NA,
-      x.max.cap = x_max_cap,
+      x.max.cap = NA,
       mutationCopyNumber = mutation.copy.number,
       no.chrs.bearing.mut = copyNumberAdjustment,
       density.smooth = density_smooth_1d
