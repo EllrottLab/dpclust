@@ -634,6 +634,8 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
       # remove clusters that are too small
       clusterids_to_remove <- clustering$cluster.locations[clusters_to_remove, 1]
       new_cluster.locations <- clustering$cluster.locations[!clustering$cluster.locations[, 1] %in% clusterids_to_remove, , drop = FALSE]
+      kept_clusterids <- new_cluster.locations[, 1]
+      new_cluster.locations[, 1] <- seq_len(nrow(new_cluster.locations))
       if (.has_assignment_likelihoods(clustering)) {
         new_all.assignment.likelihoods <- clustering$all.assignment.likelihoods[, !clusters_to_remove, drop = FALSE]
       } else {
@@ -641,9 +643,12 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
       }
       new_best.assignment.likelihoods <- clustering$best.assignment.likelihoods
       new_best.node.assignments <- clustering$best.node.assignments
+      removed_assignment_mask <- !is.na(new_best.node.assignments) & (new_best.node.assignments %in% clusterids_to_remove)
+      kept_mask <- !is.na(new_best.node.assignments) & !removed_assignment_mask
+      new_best.node.assignments[kept_mask] <- match(new_best.node.assignments[kept_mask], kept_clusterids)
       # reset best likelihoods and hard assignments for mutations assigned to the removed cluster(s)
-      new_best.assignment.likelihoods[new_best.node.assignments %in% clusterids_to_remove] <- NA
-      new_best.node.assignments[new_best.node.assignments %in% clusterids_to_remove] <- NA
+      new_best.assignment.likelihoods[removed_assignment_mask] <- NA
+      new_best.node.assignments[removed_assignment_mask] <- NA
 
       clustering$cluster.locations <- new_cluster.locations
       clustering$all.assignment.likelihoods <- new_all.assignment.likelihoods
@@ -683,6 +688,24 @@ writeStandardFinalOutput <- function(clustering, dataset, most.similar.mut, outf
           mutationTypes = dataset$mutationType
         )
       }
+    }
+  }
+
+  if (ncol(dataset$mutCount) == 1 && any(is.na(clustering$best.node.assignments))) {
+    if (!is.null(GS.data) && !.is_na_sentinel(GS.data) && !is.null(density) && !.is_na_sentinel(density)) {
+      log_info(sprintf(
+        "Reassigning %d mutation(s) with NA cluster after 1D small-cluster filtering.",
+        sum(is.na(clustering$best.node.assignments))
+      ))
+      clustering <- reassign_1d_na_mutations(
+        clustering = clustering,
+        GS.data = GS.data,
+        density = density,
+        no.iters = no.iters,
+        no.iters.burn.in = no.iters.burn.in
+      )
+    } else {
+      log_info("Skipping 1D NA reassignment because GS.data or density is unavailable.")
     }
   }
 
@@ -1093,7 +1116,7 @@ DirichletProcessClustering <- function(mutCount, WTCount, totalCopyNumber, copyN
       post.burn.in.stop = no.iters,
       y.max = 15,
       x.max = NA,
-      x.max.cap = x_max_cap,
+      x.max.cap = NA,
       mutationCopyNumber = mutation.copy.number,
       no.chrs.bearing.mut = copyNumberAdjustment,
       density.smooth = density_smooth_1d

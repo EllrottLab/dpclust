@@ -944,13 +944,75 @@ get_mutation_preferences <- function(GS.data, density, mut_assignments, clusteri
         iter_states <- S.i[s_state, ]
         unique_clusters <- unique(iter_states)
         # Vectorized mapping for all mutations in this iteration
-        optima_indices <- vapply(unique_clusters, function(c) sum(pi.h[s_pi, c, t] > boundary) + 1, integer(1))
+        optima_indices <- vapply(unique_clusters, function(c) {
+          as.integer(sum(pi.h[s_pi, c, t] > boundary)) + 1L
+        }, integer(1))
         map_optima <- localOptima[optima_indices]
         assign_ccfs[iter_idx, , t] <- map_optima[match(iter_states, unique_clusters)]
       }
     }
   }
   return(assign_ccfs)
+}
+
+#' Reassign mutations that lost their cluster after 1D small-cluster pruning.
+#'
+#' This rebuilds mutation-to-cluster probabilities against the surviving 1D
+#' cluster locations only, then fills any NA hard assignments.
+reassign_1d_na_mutations <- function(clustering, GS.data, density, no.iters, no.iters.burn.in) {
+  if (all(!is.na(clustering$best.node.assignments))) {
+    return(clustering)
+  }
+
+  clusterids <- as.integer(clustering$cluster.locations[, 1])
+  cluster_ccfs <- as.numeric(clustering$cluster.locations[, 2])
+  no.clusters <- length(clusterids)
+  no.muts <- length(clustering$best.node.assignments)
+
+  if (no.clusters == 0) {
+    return(clustering)
+  }
+
+  if (no.clusters == 1) {
+    reassigned_probs <- matrix(1, nrow = no.muts, ncol = 1)
+  } else {
+    assign_ccfs <- get_mutation_preferences(
+      GS.data = GS.data,
+      density = density,
+      mut_assignments = clustering$best.node.assignments,
+      clusterids = clusterids,
+      cluster_ccfs = cluster_ccfs,
+      no.muts = no.muts,
+      no.timepoints = 1,
+      no.iters = no.iters,
+      no.iters.burn.in = no.iters.burn.in
+    )[, , 1, drop = TRUE]
+
+    tol <- sqrt(.Machine$double.eps)
+    reassigned_probs <- vapply(seq_along(cluster_ccfs), function(i) {
+      colMeans(abs(assign_ccfs - cluster_ccfs[i]) < tol)
+    }, numeric(no.muts))
+
+    zero_rows <- rowSums(reassigned_probs) == 0
+    if (any(zero_rows)) {
+      reassigned_probs[zero_rows, ] <- 1 / no.clusters
+    }
+  }
+
+  reassigned_probs <- reassigned_probs / rowSums(reassigned_probs)
+  reassigned_idx <- max.col(reassigned_probs, ties.method = "first")
+  reassigned_ids <- clusterids[reassigned_idx]
+  reassigned_likelihoods <- reassigned_probs[cbind(seq_len(no.muts), reassigned_idx)]
+
+  na_mask <- is.na(clustering$best.node.assignments)
+  clustering$best.node.assignments[na_mask] <- reassigned_ids[na_mask]
+  clustering$best.assignment.likelihoods[na_mask] <- reassigned_likelihoods[na_mask]
+  clustering$all.assignment.likelihoods <- reassigned_probs
+
+  assignment_counts <- table(factor(clustering$best.node.assignments, levels = clusterids))
+  clustering$cluster.locations[, ncol(clustering$cluster.locations)] <- as.integer(assignment_counts)
+
+  clustering
 }
 
 

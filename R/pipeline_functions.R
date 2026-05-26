@@ -47,7 +47,7 @@ reassign_1D <- function(outdir, samplename, no.iters, no.iters.burn.in, dataset,
     post.burn.in.stop = no.iters,
     y.max = 15,
     x.max = NA,
-    x.max.cap = x_max_cap,
+    x.max.cap = NA,
     mutationCopyNumber = dataset$mutation.copy.number,
     no.chrs.bearing.mut = dataset$copyNumberAdjustment
   )
